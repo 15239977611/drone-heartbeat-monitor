@@ -84,17 +84,18 @@ def check_connection():
 # ================== 页面配置 ==================
 st.set_page_config(page_title="无人机智能监测系统", layout="wide")
 st.sidebar.title("导航")
-# 新增模式切换：原版/圈选版
-mode = st.sidebar.radio("选择模式", ["原版航线规划（不变）", "障碍物圈选模式（新增）", "飞行监控"])
+page = st.sidebar.radio("功能页面", ["航线规划", "飞行监控"])
 
-# ================== 1. 原版航线规划（完全不变） ==================
-if mode == "原版航线规划（不变）":
-    st.title("🗺️ 航线规划")
-    st.markdown("设置起飞点 **A（校园内）** 和降落点 **B（校外）**，自动生成障碍物。")
+# ================== 航线规划页面 ==================
+if page == "航线规划":
+    st.title("🗺️ 航线规划 & 障碍物设置")
+    st.markdown("设置起飞点A、降落点B，支持多边形圈选障碍物，数据自动保存在本地。")
 
+    # 默认坐标（南京科技职业学院附近，GCJ-02）
     default_a = (32.2322, 118.7490)
     default_b = (32.2343, 118.7490)
 
+    # 获取当前 A/B 点
     if 'a_point' in st.session_state:
         a_lat_raw, a_lng_raw, a_sys = st.session_state.a_point
     else:
@@ -104,14 +105,33 @@ if mode == "原版航线规划（不变）":
     else:
         b_lat_raw, b_lng_raw, b_sys = default_b[0], default_b[1], "GCJ-02 (高德/百度)"
 
+    # 侧边栏：障碍物设置 + 坐标系
     with st.sidebar:
         st.subheader("⚙️ 障碍物设置")
-        st.session_state.obstacle_count = st.slider("障碍物数量", 1, 10, st.session_state.obstacle_count)
-        
-        if st.button("🔄 重置障碍物"):
+        st.info("1. 点击地图获取坐标\n2. 输入顶点，点击添加多边形")
+
+        # 障碍物输入
+        with st.expander("添加多边形障碍物"):
+            poly_str = st.text_area("输入多边形顶点（JSON格式）", 
+                                    "[[32.233,118.749],[32.2331,118.7491],[32.2332,118.7490]]",
+                                    help="输入顶点坐标列表，最后一个点会自动闭合")
+            height = st.number_input("障碍物高度(m)", 20, 200, 50)
+            if st.button("✅ 添加多边形障碍物"):
+                try:
+                    poly_points = json.loads(poly_str)
+                    st.session_state.obstacles.append({
+                        "points": poly_points,
+                        "height": height
+                    })
+                    save_obstacles_to_file(st.session_state.obstacles)
+                    st.success("添加成功！")
+                except:
+                    st.error("格式错误，请检查JSON格式")
+
+        if st.button("🔄 清空所有障碍物"):
             st.session_state.obstacles = []
             save_obstacles_to_file([])
-            st.success("障碍物已清空")
+            st.success("已清空所有障碍物")
 
         st.markdown("---")
         st.subheader("🌐 坐标系设置")
@@ -121,6 +141,7 @@ if mode == "原版航线规划（不变）":
             st.session_state.b_point = (b_lat_raw, b_lng_raw, unified_coord_sys)
             st.success("坐标系已同步到A、B点！")
 
+    # 转换为 WGS-84
     if a_sys == "GCJ-02 (高德/百度)":
         a_lat_wgs, a_lng_wgs = gcj02_to_wgs84(a_lat_raw, a_lng_raw)
     else:
@@ -132,24 +153,19 @@ if mode == "原版航线规划（不变）":
 
     obstacles = st.session_state.obstacles
 
-    circles_js = ""
+    # ========== 构造卫星地图（显示多边形障碍物） ==========
+    polygons_js = ""
     for i, obs in enumerate(obstacles):
-        circles_js += f"""
-            L.circle([{obs[0]}, {obs[1]}], {{
+        points = obs["points"]
+        # 转换为Leaflet格式
+        latlngs = ", ".join([f"[{p[0]}, {p[1]}]" for p in points])
+        polygons_js += f"""
+            L.polygon([{latlngs}], {{
                 color: 'orange',
                 fillColor: '#ff7800',
                 fillOpacity: 0.5,
-                radius: 15,
                 weight: 2
-            }}).addTo(map).bindPopup('障碍物 {i+1}<br>高度: {obs[2]} 米');
-            L.marker([{obs[0]}, {obs[1]}], {{
-                icon: L.divIcon({{
-                    html: '{i+1}',
-                    className: 'obstacle-label',
-                    iconSize: [20, 20],
-                    popupAnchor: [0, -10]
-                }})
-            }}).addTo(map);
+            }}).addTo(map).bindPopup('障碍物 {i+1}<br>高度: {obs["height"]} 米');
         """
 
     map_html = f"""
@@ -162,16 +178,6 @@ if mode == "原版航线规划（不变）":
         <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
         <style>
             html, body, #map {{ margin: 0; height: 100%; width: 100%; }}
-            .obstacle-label {{
-                background-color: orange;
-                color: white;
-                font-weight: bold;
-                border-radius: 50%;
-                text-align: center;
-                line-height: 20px;
-                font-size: 12px;
-                border: 1px solid darkorange;
-            }}
         </style>
     </head>
     <body>
@@ -184,10 +190,12 @@ if mode == "原版航线规划（不变）":
                 attributionControl: true
             }});
 
+            // 高清卫星地图
             L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{{z}}/{{y}}/{{x}}', {{
                 attribution: 'Leaflet | 卫星地图'
             }}).addTo(map);
 
+            // A 点
             L.marker([{a_lat_wgs}, {a_lng_wgs}], {{
                 icon: L.divIcon({{
                     html: '<div style="background-color: green; color: white; padding: 2px 6px; border-radius: 12px;">A 起点</div>',
@@ -197,6 +205,7 @@ if mode == "原版航线规划（不变）":
                 }})
             }}).addTo(map).bindPopup('起点 A (校园内)');
 
+            // B 点
             L.marker([{b_lat_wgs}, {b_lng_wgs}], {{
                 icon: L.divIcon({{
                     html: '<div style="background-color: red; color: white; padding: 2px 6px; border-radius: 12px;">B 终点</div>',
@@ -206,6 +215,7 @@ if mode == "原版航线规划（不变）":
                 }})
             }}).addTo(map).bindPopup('终点 B (校外)');
 
+            // 航线
             var polyline = L.polyline([[{a_lat_wgs}, {a_lng_wgs}], [{b_lat_wgs}, {b_lng_wgs}]], {{
                 color: 'blue',
                 weight: 5,
@@ -213,7 +223,8 @@ if mode == "原版航线规划（不变）":
             }}).addTo(map);
             polyline.bindPopup('航线');
 
-            {circles_js}
+            // 多边形障碍物
+            {polygons_js}
         </script>
     </body>
     </html>
@@ -222,6 +233,7 @@ if mode == "原版航线规划（不变）":
     st.subheader("🗺️ 卫星地图（高清影像）")
     html(map_html, width=700, height=500)
 
+    # 下方控件
     col1, col2 = st.columns(2)
     with col1:
         st.subheader("起点 A（校园内）")
@@ -248,73 +260,11 @@ if mode == "原版航线规划（不变）":
     col5, _ = st.columns(2)
     col5.metric("障碍物数量", len(obstacles))
 
-    with st.expander("📋 障碍物详细信息 (WGS-84)"):
+    with st.expander("📋 障碍物详细信息"):
         for i, obs in enumerate(obstacles):
-            st.write(f"**障碍物 {i+1}**: 纬度 {obs[0]:.6f}, 经度 {obs[1]:.6f}, 高度 {obs[2]} 米")
+            st.write(f"**障碍物 {i+1}**: 顶点数 {len(obs['points'])}, 高度 {obs['height']} 米")
 
-# ================== 2. 新增：障碍物圈选模式（多边形圈选+记忆） ==================
-elif mode == "障碍物圈选模式（新增）":
-    st.title("🗺️ 障碍物圈选（多边形+本地记忆）")
-    st.markdown("在地图上点击绘制多边形圈选障碍物，数据自动保存在本地，刷新不丢失。")
-
-    import streamlit_folium as sf
-    import folium
-    from folium.plugins import Draw
-
-    # 初始化地图
-    m = folium.Map(location=[32.233, 118.749], zoom_start=18, tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", attr="卫星地图")
-    
-    # 加载已保存的障碍物多边形
-    obstacles = st.session_state.obstacles
-    for obs in obstacles:
-        folium.Polygon(
-            locations=obs["points"],
-            color="orange",
-            fill=True,
-            fill_color="#ff7800",
-            fill_opacity=0.5,
-            popup=f"障碍物（高度：{obs['height']}m）"
-        ).add_to(m)
-
-    # 开启多边形绘制工具
-    draw = Draw(
-        draw_options={
-            "polyline": False,
-            "rectangle": False,
-            "circle": False,
-            "marker": False,
-            "circlemarker": False,
-            "polygon": {"shapeOptions": {"color": "orange", "fillColor": "#ff7800", "fillOpacity": 0.5}}
-        },
-        edit_options={"edit": True}
-    )
-    draw.add_to(m)
-
-    # 显示地图
-    st_data = sf.folium_static(m, width=1000, height=600)
-
-    # 侧边栏：障碍物操作
-    with st.sidebar:
-        st.subheader("🧱 障碍物操作")
-        height = st.number_input("障碍物高度(m)", 20, 200, 50)
-        
-        if st.button("✅ 保存圈选的障碍物"):
-            # 简化：直接提示用户，这里用手动输入坐标的方式保存（避免复杂的前端交互）
-            st.info("💡 提示：请在下方输入多边形顶点坐标，格式：[[lat1,lng1],[lat2,lng2],...]")
-            st.code("例如：[[32.233,118.749],[32.2331,118.7491],[32.2332,118.7490]]")
-
-        if st.button("🔄 清空所有障碍物"):
-            st.session_state.obstacles = []
-            save_obstacles_to_file([])
-            st.success("已清空所有障碍物，本地文件也已删除")
-
-        st.markdown("---")
-        st.subheader("📊 障碍物列表")
-        st.write(f"当前障碍物数量：{len(obstacles)}")
-        for i, obs in enumerate(obstacles):
-            st.write(f"障碍物{i+1}：高度{obs['height']}m，顶点数{len(obs['points'])}")
-
-# ================== 3. 飞行监控页面（完全不变） ==================
+# ================== 飞行监控页面 ==================
 else:
     st.title("📡 飞行监控")
     st.markdown("实时心跳包监测（每秒一次），3秒未收到则报警。")
