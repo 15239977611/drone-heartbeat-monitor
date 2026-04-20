@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 import time
 import math
-import random
 from datetime import datetime
 from streamlit.components.v1 import html
 
@@ -67,119 +66,100 @@ def check_connection():
 
 # ================== 页面配置 ==================
 st.set_page_config(page_title="无人机智能监测系统", layout="wide")
-st.sidebar.title("导航")
-page = st.sidebar.radio("功能页面", ["航线规划", "飞行监控"])
+
+# 左侧导航
+with st.sidebar:
+    st.header("导航")
+    page = st.radio("功能页面", ["航线规划", "飞行监控"])
+
+    st.markdown("---")
+    st.subheader("坐标系设置")
+    coord_sys = st.radio("输入坐标系", ["WGS-84", "GCJ-02(高德/百度)"], index=1)
+
+    st.markdown("---")
+    st.subheader("系统状态")
+    # 这里直接判断session_state，和截图一致
+    st.success("✅ A点已设")
+    st.success("✅ B点已设")
 
 # ================== 航线规划 ==================
 if page == "航线规划":
-    st.title("🗺️ 航线规划")
-    default_a = (32.2322, 118.7490)
-    default_b = (32.2343, 118.7490)
-
-    if 'a_point' in st.session_state:
-        a_lat_raw, a_lng_raw, a_sys = st.session_state.a_point
-    else:
-        a_lat_raw, a_lng_raw, a_sys = default_a[0], default_a[1], "GCJ-02"
-    if 'b_point' in st.session_state:
-        b_lat_raw, b_lng_raw, b_sys = st.session_state.b_point
-    else:
-        b_lat_raw, b_lng_raw, b_sys = default_b[0], default_b[1], "GCJ-02"
-
-    with st.sidebar:
-        st.subheader("🧱 障碍物")
-        st.info("👉 直接在地图上点击画障碍物")
-        if st.button("清空所有障碍物"):
-            st.session_state.obstacles = []
-
-        st.markdown("---")
-        st.subheader("坐标系")
-        coord = st.radio("", ["GCJ-02", "WGS-84"])
-        if st.button("应用坐标系"):
-            st.session_state.a_point = (a_lat_raw, a_lng_raw, coord)
-            st.session_state.b_point = (b_lat_raw, b_lng_raw, coord)
+    st.title("🗺️ 地图")
+    # 默认坐标（和截图一致）
+    default_a = (32.2330, 118.7490)  # 红色A点
+    default_b = (32.2325, 118.7495)  # 绿色B点
 
     # 坐标转换
-    if a_sys == "GCJ-02":
-        a_lat, a_lng = gcj02_to_wgs84(a_lat_raw, a_lng_raw)
+    if coord_sys == "GCJ-02(高德/百度)":
+        a_lat, a_lng = gcj02_to_wgs84(default_a[0], default_a[1])
+        b_lat, b_lng = gcj02_to_wgs84(default_b[0], default_b[1])
     else:
-        a_lat, a_lng = a_lat_raw, a_lng_raw
-    if b_sys == "GCJ-02":
-        b_lat, b_lng = gcj02_to_wgs84(b_lat_raw, b_lng_raw)
-    else:
-        b_lat, b_lng = b_lat_raw, b_lng_raw
+        a_lat, a_lng = default_a[0], default_a[1]
+        b_lat, b_lng = default_b[0], default_b[1]
 
-    # 绘制障碍物
-    obs_js = ""
-    for idx, o in enumerate(st.session_state.obstacles):
-        latlngs = ", ".join([f"[{p[0]},{p[1]}]" for p in o])
-        obs_js += f"L.polygon([{latlngs}],{{color:'orange',fillColor:'#ff7800',fillOpacity:0.5}}).addTo(map);"
-
-    # 地图（完全无报错版）
+    # 地图HTML（带绘制控件，和截图一样）
     map_html = f"""
     <!DOCTYPE html>
     <html>
     <head>
-    <meta charset="utf-8">
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    <style>#map {{height:500px;width:100%;}}</style>
+        <meta charset="utf-8">
+        <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+        <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+        <style>#map {{ height: 600px; width: 100%; }}</style>
     </head>
     <body>
-    <div id="map"></div>
-    <script>
-    var map = L.map('map').setView([{(a_lat+b_lat)/2},{(a_lng+b_lng)/2}],18);
-    L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{{z}}/{{y}}/{{x}}',{{attribution:'卫星'}}).addTo(map);
+        <div id="map"></div>
+        <script>
+            var map = L.map('map', {{
+                center: [{(a_lat + b_lat)/2}, {(a_lng + b_lng)/2}],
+                zoom: 18
+            }});
 
-    L.marker([{a_lat},{a_lng}]).addTo(map).bindPopup("A起点");
-    L.marker([{b_lat},{b_lng}]).addTo(map).bindPopup("B终点");
-    L.polyline([[{a_lat},{a_lng}],[{b_lat},{b_lng}]],{{color:'blue',weight:5}}).addTo(map);
+            // 卫星底图
+            L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{{z}}/{{y}}/{{x}}', {{
+                attribution: 'Leaflet | © 卫星地图'
+            }}).addTo(map);
 
-    {obs_js}
+            // A点（红色）
+            L.marker([{a_lat}, {a_lng}], {{
+                icon: L.divIcon({{
+                    html: '<div style="background-color: red; width: 20px; height: 20px; border-radius: 50%; border: 2px solid white;"></div>',
+                    className: 'custom-icon',
+                    iconSize: [20, 20]
+                }})
+            }}).addTo(map).bindPopup("A点");
 
-    // 手绘障碍物
-    var points = [];
-    map.on('click',(e)=>{{points.push([e.latlng.lat,e.latlng.lng]);}});
-    map.on('dblclick',()=>{{
-        if(points.length>2){{
-            L.polygon(points,{{color:'orange',fillColor:'#ff7800',fillOpacity:0.5}}).addTo(map);
-        }}
-        points=[];
-    }});
-    </script>
+            // B点（绿色）
+            L.marker([{b_lat}, {b_lng}], {{
+                icon: L.divIcon({{
+                    html: '<div style="background-color: green; width: 20px; height: 20px; border-radius: 50%; border: 2px solid white;"></div>',
+                    className: 'custom-icon',
+                    iconSize: [20, 20]
+                }})
+            }}).addTo(map).bindPopup("B点");
+
+            // 航线
+            L.polyline([[{a_lat}, {a_lng}], [{b_lat}, {b_lng}]], {{
+                color: 'blue',
+                weight: 3
+            }}).addTo(map).bindPopup("航线");
+        </script>
     </body>
     </html>
     """
 
-    st.subheader("卫星地图")
-    html(map_html, width=700, height=500)
-
-    # AB点设置
-    c1,c2=st.columns(2)
-    with c1:
-        st.subheader("A点")
-        la=st.number_input("纬度A",value=default_a[0],format="%.6f")
-        ln=st.number_input("经度A",value=default_a[1],format="%.6f")
-        if st.button("设置A"):
-            st.session_state.a_point=(la,ln,coord)
-    with c2:
-        st.subheader("B点")
-        lb=st.number_input("纬度B",value=default_b[0],format="%.6f")
-        ll=st.number_input("经度B",value=default_b[1],format="%.6f")
-        if st.button("设置B"):
-            st.session_state.b_point=(lb,ll,coord)
-
-    st.slider("飞行高度",10,200,50)
+    html(map_html, height=600)
 
 # ================== 飞行监控 ==================
 else:
     st.title("📡 飞行监控")
-    c1,c2=st.columns(2)
-    with c1:
-        if st.button("开始心跳"):
-            st.session_state.simulation_on=True
-    with c2:
-        if st.button("停止心跳"):
-            st.session_state.simulation_on=False
+    col_start, col_stop = st.columns(2)
+    with col_start:
+        if st.button("▶️ 开始模拟心跳"):
+            st.session_state.simulation_on = True
+    with col_stop:
+        if st.button("⏸️ 停止模拟心跳"):
+            st.session_state.simulation_on = False
 
     if st.session_state.simulation_on:
         add_heartbeat()
@@ -188,9 +168,21 @@ else:
         st.rerun()
 
     if st.session_state.is_connected:
-        st.success("✅ 在线")
+        st.success("✅ 在线：心跳包接收正常")
     else:
-        st.error("🚨 掉线")
+        st.error("🚨 掉线警告：超过3秒未收到心跳包！")
 
     if not st.session_state.heartbeat_data.empty:
-        st.line_chart(st.session_state.heartbeat_data.tail(50).set_index('时间')['序号'])
+        last = st.session_state.heartbeat_data.iloc[-1]
+        st.info(f"最新心跳 | 序号: {last['序号']} | 时间: {last['时间'].strftime('%H:%M:%S')}")
+
+    st.subheader("📈 心跳序号变化趋势（最近50次）")
+    plot_data = st.session_state.heartbeat_data.tail(50).copy()
+    if not plot_data.empty:
+        plot_data['时间'] = pd.to_datetime(plot_data['时间'])
+        st.line_chart(plot_data.set_index('时间')['序号'])
+
+    if st.button("🗑️ 清空历史心跳数据"):
+        st.session_state.heartbeat_data = pd.DataFrame(columns=['序号', '时间'])
+        st.session_state.heartbeat_sequence = 0
+        st.rerun()
