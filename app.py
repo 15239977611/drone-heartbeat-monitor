@@ -33,9 +33,9 @@ def gcj02_to_wgs84(lat, lng):
     sqrtmagic = math.sqrt(magic)
     dlat = (dlat * 180.0) / ((a * (1 - ee)) / (magic * sqrtmagic) * math.pi)
     dlng = (dlng * 180.0) / (a / sqrtmagic * math.cos(radlat) * math.pi)
-    return lat - dlat, lng - dlng
+    return lat - dlat, lng - dln
 
-# ================== 初始化所有状态 ==================
+# ================== 初始化 ==================
 if 'obstacles' not in st.session_state:
     st.session_state.obstacles = []
 if 'click_lat' not in st.session_state:
@@ -59,7 +59,7 @@ if 'heartbeat_sequence' not in st.session_state:
 if 'simulation_on' not in st.session_state:
     st.session_state.simulation_on = False
 
-# ================== 心跳功能 ==================
+# ================== 心跳 ==================
 def add_heartbeat():
     st.session_state.heartbeat_sequence += 1
     new_row = pd.DataFrame([{'序号': st.session_state.heartbeat_sequence, '时间': datetime.now()}])
@@ -71,149 +71,92 @@ def check_connection():
     if (datetime.now() - st.session_state.last_heartbeat_time).total_seconds() > 3:
         st.session_state.is_connected = False
 
-# ================== 页面配置 ==================
-st.set_page_config(page_title="无人机监控系统", layout="wide")
-st.sidebar.title("📡 无人机导航")
-page = st.sidebar.radio("选择页面", ["🗺️ 航线规划", "📶 飞行监控"])
+# ================== 页面 ==================
+st.set_page_config(page_title="无人机监控", layout="wide")
+st.sidebar.title("导航")
+page = st.sidebar.radio("页面", ["🗺️ 航线规划", "📶 飞行监控"])
 
-# ================== 航线规划页面 ==================
+# ================== 航线规划 ==================
 if page == "🗺️ 航线规划":
-    st.title("🗺️ 航线规划 & 障碍物设置")
+    st.title("🗺️ 航线规划 & 障碍物")
 
     a_lat_raw, a_lng_raw, a_sys = st.session_state.a_point
     b_lat_raw, b_lng_raw, b_sys = st.session_state.b_point
 
-    # 左侧控制面板
     with st.sidebar:
-        st.markdown("---")
-        st.subheader("🧱 障碍物操作")
-        st.info("1. 点击地图点位\n2. 点击确认添加")
-        
+        st.subheader("障碍物")
         if st.button("✅ 确认添加障碍物"):
             if st.session_state.click_lat and st.session_state.click_lng:
-                height = random.randint(20, 60)
-                st.session_state.obstacles.append((st.session_state.click_lat, st.session_state.click_lng, height))
-                st.success(f"添加成功！高度：{height}m")
-                st.session_state.click_lat = None
-                st.session_state.click_lng = None
-            else:
-                st.warning("请先在地图上点击！")
-        
-        if st.button("🔄 清空所有障碍物"):
-            st.session_state.obstacles = []
-            st.success("已清空所有障碍物")
+                st.session_state.obstacles.append((st.session_state.click_lat, st.session_state.click_lng, random.randint(20,60)))
+                st.success("添加成功")
+                st.session_state.click_lat=None
+                st.session_state.click_lng=None
+        if st.button("🔄 清空障碍物"):
+            st.session_state.obstacles=[]
 
-        st.markdown("---")
-        st.subheader("🌐 坐标系")
-        coord_sys = st.radio("坐标系", ["GCJ-02", "WGS-84"])
-        if st.button("✅ 应用到 A、B 点"):
-            st.session_state.a_point = (a_lat_raw, a_lng_raw, coord_sys)
-            st.session_state.b_point = (b_lat_raw, b_lng_raw, coord_sys)
-            st.success("应用成功！")
+        st.subheader("坐标系")
+        coord_sys = st.radio("坐标系", ["GCJ-02","WGS-84"])
+        if st.button("应用到A/B点"):
+            st.session_state.a_point = (a_lat_raw,a_lng_raw,coord_sys)
+            st.session_state.b_point = (b_lat_raw,b_lng_raw,coord_sys)
 
-    # 坐标转换
-    def wgs(lat, lng, sys):
-        return gcj02_to_wgs84(lat, lng) if sys == "GCJ-02" else (lat, lng)
-    a_lat, a_lng = wgs(a_lat_raw, a_lng_raw, a_sys)
-    b_lat, b_lng = wgs(b_lat_raw, b_lng_raw, b_sys)
+    def wgsPoint(lat,lng,s):
+        return gcj02_to_wgs84(lat,lng) if s=="GCJ-02" else (lat,lng)
+    a_lat,a_lng = wgsPoint(a_lat_raw,a_lng_raw,a_sys)
+    b_lat,b_lng = wgsPoint(b_lat_raw,b_lng_raw,b_sys)
 
-    # 障碍物绘制
     obs_js = ""
-    for i, (lat, lng, h) in enumerate(st.session_state.obstacles):
-        obs_js += f"""
-        L.circle([{lat},{lng}],{{color:'orange',fillColor:'#ff8c00',fillOpacity:0.7,radius:15}}).addTo(map);
-        L.marker([{lat},{lng}],{{icon:L.divIcon({{html:'{i+1}',className:'obs',iconSize:[22,22]}})}}).addTo(map);
-        """
+    for i,(lat,lng,h) in enumerate(st.session_state.obstacles):
+        obs_js += f"L.circle([{lat},{lng}],{{color:'orange',fillOpacity:0.7,radius:15}}).addTo(map);"
 
     temp_js = ""
     if st.session_state.click_lat:
         temp_js = f"L.marker([{st.session_state.click_lat},{st.session_state.click_lng}]).addTo(map);"
 
-    # ================== 地图HTML（修复版，无报错）==================
-    map_html = """
+    map_html = f"""
     <!DOCTYPE html>
     <html>
     <head>
-        <meta charset="utf-8">
-        <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-        <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-        <style>
-            #map {width:100%;height:600px;}
-            .obs {background:orange;color:white;font-weight:bold;border-radius:50%;text-align:center;line-height:22px;}
-        </style>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <style>#map {{width:100%;height:600px;}}</style>
     </head>
     <body>
-        <div id="map"></div>
-        <script>
-            var map = L.map('map').setView(["""+str((a_lat+b_lat)/2)+""","""+str((a_lng+b_lng)/2)+"""], 18);
-            L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-                attribution: 'OpenStreetMap'
-            }).addTo(map);
-
-            L.marker(["""+str(a_lat)+","""+str(a_lng)+"""]).addTo(map).bindPopup('A起点');
-            L.marker(["""+str(b_lat)+","""+str(b_lng)+"""]).addTo(map).bindPopup('B终点');
-            L.polyline([["""+str(a_lat)+","""+str(a_lng)+"""],["""+str(b_lat)+","""+str(b_lng)+"""]],{color:'blue',weight:5}).addTo(map);
-            
-            """+obs_js+"""
-            """+temp_js+"""
-            
-            map.on('click', function(e) {
-                window.parent.postMessage({
-                    type:'mapClick', lat:e.latlng.lat, lng:e.latlng.lng
-                }, '*');
-            });
-        </script>
+    <div id="map"></div>
+    <script>
+    var map = L.map('map').setView([{(a_lat+b_lat)/2},{(a_lng+b_lng)/2}],17);
+    L.tileLayer('https://tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png').addTo(map);
+    L.marker([{a_lat},{a_lng}]).addTo(map).bindPopup('A');
+    L.marker([{b_lat},{b_lng}]).addTo(map).bindPopup('B');
+    L.polyline([[{a_lat},{a_lng}],[{b_lat},{b_lng}]],{{color:'blue'}}).addTo(map);
+    {obs_js}
+    {temp_js}
+    </script>
     </body>
     </html>
     """
+    html(map_html, height=600)
 
-    # 显示地图
-    html(map_html, height=620)
+    col1,col2=st.columns(2)
+    with col1:
+        st.number_input("A纬度",value=a_lat_raw,format="%.6f")
+        st.number_input("A经度",value=a_lng_raw,format="%.6f")
+    with col2:
+        st.number_input("B纬度",value=b_lat_raw,format="%.6f")
+        st.number_input("B经度",value=b_lng_raw,format="%.6f")
 
-    # 接收地图点击
-    try:
-        msg = st.components.v1.get_component_message("mapClick")
-        if msg:
-            st.session_state.click_lat = msg["lat"]
-            st.session_state.click_lng = msg["lng"]
-    except:
-        pass
+    st.subheader(f"障碍物：{len(st.session_state.obstacles)}")
 
-    # A、B点设置
-    st.markdown("---")
-    c1, c2 = st.columns(2)
-    with c1:
-        st.subheader("📍 A 点")
-        a1 = st.number_input("A 纬度", a_lat_raw, format="%.6f")
-        a2 = st.number_input("A 经度", a_lng_raw, format="%.6f")
-        if st.button("✅ 设置 A 点"):
-            st.session_state.a_point = (a1, a2, coord_sys)
-    with c2:
-        st.subheader("📍 B 点")
-        b1 = st.number_input("B 纬度", b_lat_raw, format="%.6f")
-        b2 = st.number_input("B 经度", b_lng_raw, format="%.6f")
-        if st.button("✅ 设置 B 点"):
-            st.session_state.b_point = (b1, b2, coord_sys)
-
-    # 显示障碍物
-    st.markdown("---")
-    st.subheader(f"当前障碍物：{len(st.session_state.obstacles)} 个")
-    if st.session_state.obstacles:
-        with st.expander("查看障碍物详情"):
-            for i, (lat, lng, h) in enumerate(st.session_state.obstacles):
-                st.write(f"{i+1}. 坐标：{lat:.6f}, {lng:.6f}  高度：{h}m")
-
-# ================== 飞行监控页面 ==================
+# ================== 飞行监控 ==================
 else:
-    st.title("📶 无人机心跳监控")
-
-    c1, c2 = st.columns(2)
+    st.title("📶 心跳监控")
+    c1,c2=st.columns(2)
     with c1:
-        if st.button("▶️ 开始心跳模拟"):
-            st.session_state.simulation_on = True
+        if st.button("开始"):
+            st.session_state.simulation_on=True
     with c2:
-        if st.button("⏸️ 停止模拟"):
-            st.session_state.simulation_on = False
+        if st.button("停止"):
+            st.session_state.simulation_on=False
 
     if st.session_state.simulation_on:
         add_heartbeat()
@@ -222,19 +165,9 @@ else:
         st.rerun()
 
     if st.session_state.is_connected:
-        st.success("✅ 无人机在线，心跳正常")
+        st.success("在线")
     else:
-        st.error("🚨 无人机失联！")
+        st.error("失联")
 
     if not st.session_state.heartbeat_data.empty:
-        last = st.session_state.heartbeat_data.iloc[-1]
-        st.info(f"最新心跳：#{last['序号']}  {last['时间'].strftime('%H:%M:%S')}")
-
-    st.subheader("📈 心跳趋势")
-    df = st.session_state.heartbeat_data.tail(50)
-    if not df.empty:
-        st.line_chart(df.set_index("时间")["序号"])
-
-    if st.button("🗑️ 清空心跳数据"):
-        st.session_state.heartbeat_data = pd.DataFrame(columns=['序号', '时间'])
-        st.session_state.heartbeat_sequence = 0
+        st.line_chart(st.session_state.heartbeat_data.tail(50),x="时间",y="序号")
