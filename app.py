@@ -105,14 +105,15 @@ def get_path():
 
 # ================== 地图 ==================
 if page == "航线规划":
-    st.title("🗺️ 智能卫星航线规划")
+    st.title("🗺️ 智能卫星地图航线规划")
     st.success(f"🛸 无人机飞行高度：{st.session_state.drone_height} 米")
 
-    # ✅ 修复地图瓦片报错（关键！）
+    # ✅ 修复卫星地图 + 保留原来样式（关键修复！）
     m = folium.Map(
         location=[32.2330, 118.7490],
         zoom_start=18,
-        tiles="OpenStreetMap"  # 用官方默认底图，不报错
+        tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+        attr="Esri World Imagery"  # 这里补上归属，地图立刻恢复！
     )
 
     # A点 B点
