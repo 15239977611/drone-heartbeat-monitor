@@ -33,7 +33,7 @@ def gcj02_to_wgs84(lat, lng):
     sqrtmagic = math.sqrt(magic)
     dlat = (dlat * 180.0) / ((a * (1 - ee)) / (magic * sqrtmagic) * math.pi)
     dlng = (dlng * 180.0) / (a / sqrtmagic * math.cos(radlat) * math.pi)
-    return lat - dlat, lng - dln
+    return lat - dlat, lng - dlng
 
 # ================== 初始化 ==================
 if 'obstacles' not in st.session_state:
