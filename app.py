@@ -37,7 +37,7 @@ def gcj02_to_wgs84(lat, lng):
     wgs_lng = lng - dlng
     return wgs_lat, wgs_lng
 
-# ================== 生成障碍物 ==================
+# ================== 生成障碍物（改为支持手动重置） ==================
 def generate_obstacles(a_lat, a_lng, b_lat, b_lng, num=5):
     obstacles = []
     for i in range(num):
@@ -63,6 +63,12 @@ if 'heartbeat_sequence' not in st.session_state:
     st.session_state.heartbeat_sequence = 0
 if 'simulation_on' not in st.session_state:
     st.session_state.simulation_on = False
+
+# 新增：障碍物状态
+if 'obstacles' not in st.session_state:
+    st.session_state.obstacles = []
+if 'obstacle_count' not in st.session_state:
+    st.session_state.obstacle_count = 5
 
 def add_heartbeat():
     st.session_state.heartbeat_sequence += 1
@@ -100,7 +106,28 @@ if page == "航线规划":
     else:
         b_lat_raw, b_lng_raw, b_sys = default_b[0], default_b[1], "GCJ-02 (高德/百度)"
 
-    # 转换为 WGS-84（OpenStreetMap 使用 WGS-84）
+    # 侧边栏：障碍物控制 + 坐标系统一设置
+    with st.sidebar:
+        st.subheader("⚙️ 障碍物设置")
+        # 障碍物数量设置
+        st.session_state.obstacle_count = st.slider("障碍物数量", 1, 10, st.session_state.obstacle_count)
+        
+        # 重置障碍物按钮
+        if st.button("🔄 重置障碍物"):
+            st.session_state.obstacles = []
+            st.success("障碍物已清空，点击「确认生成」重新生成")
+
+        st.markdown("---")
+        st.subheader("🌐 坐标系设置")
+        # 统一坐标系设置
+        unified_coord_sys = st.radio("全局坐标系", ["GCJ-02 (高德/百度)", "WGS-84"], index=0)
+        if st.button("✅ 确认并应用坐标系"):
+            # 统一设置A、B点坐标系
+            st.session_state.a_point = (a_lat_raw, a_lng_raw, unified_coord_sys)
+            st.session_state.b_point = (b_lat_raw, b_lng_raw, unified_coord_sys)
+            st.success("坐标系已同步到A、B点！")
+
+    # 转换为 WGS-84（卫星地图使用 WGS-84）
     if a_sys == "GCJ-02 (高德/百度)":
         a_lat_wgs, a_lng_wgs = gcj02_to_wgs84(a_lat_raw, a_lng_raw)
     else:
@@ -110,10 +137,12 @@ if page == "航线规划":
     else:
         b_lat_wgs, b_lng_wgs = b_lat_raw, b_lng_raw
 
-    # 生成障碍物（基于 WGS-84）
-    obstacles = generate_obstacles(a_lat_wgs, a_lng_wgs, b_lat_wgs, b_lng_wgs, num=5)
+    # 生成障碍物（如果会话中没有，则生成）
+    if not st.session_state.obstacles:
+        st.session_state.obstacles = generate_obstacles(a_lat_wgs, a_lng_wgs, b_lat_wgs, b_lng_wgs, num=st.session_state.obstacle_count)
+    obstacles = st.session_state.obstacles
 
-    # ========== 构造 卫星地图（只改了这里！！！） ==========
+    # ========== 构造卫星地图 ==========
     circles_js = ""
     for i, obs in enumerate(obstacles):
         circles_js += f"""
@@ -166,9 +195,9 @@ if page == "航线规划":
                 attributionControl: true
             }});
 
-            // ✅ 这里换成了高清卫星地图（你要的右边效果）
+            // 高清卫星地图
             L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{{z}}/{{y}}/{{x}}', {{
-                attribution: '卫星地图'
+                attribution: 'Leaflet | 卫星地图'
             }}).addTo(map);
 
             // A 点
@@ -213,18 +242,17 @@ if page == "航线规划":
     col1, col2 = st.columns(2)
     with col1:
         st.subheader("起点 A（校园内）")
-        coord_sys = st.radio("坐标系", ["GCJ-02 (高德/百度)", "WGS-84"], key="coord_sys")
         a_lat_input = st.number_input("纬度 A", value=default_a[0], format="%.6f", key="a_lat")
         a_lng_input = st.number_input("经度 A", value=default_a[1], format="%.6f", key="a_lng")
         if st.button("设置 A 点", key="set_a"):
-            st.session_state.a_point = (a_lat_input, a_lng_input, coord_sys)
+            st.session_state.a_point = (a_lat_input, a_lng_input, unified_coord_sys)
             st.success("✅ A点已保存")
     with col2:
         st.subheader("终点 B（校外）")
         b_lat_input = st.number_input("纬度 B", value=default_b[0], format="%.6f", key="b_lat")
         b_lng_input = st.number_input("经度 B", value=default_b[1], format="%.6f", key="b_lng")
         if st.button("设置 B 点", key="set_b"):
-            st.session_state.b_point = (b_lat_input, b_lng_input, coord_sys)
+            st.session_state.b_point = (b_lat_input, b_lng_input, unified_coord_sys)
             st.success("✅ B点已保存")
 
     flight_height = st.slider("飞行高度 (米)", 10, 200, 50)
@@ -234,6 +262,8 @@ if page == "航线规划":
     col3, col4 = st.columns(2)
     col3.metric("A点已设", "✅" if 'a_point' in st.session_state else "❌")
     col4.metric("B点已设", "✅" if 'b_point' in st.session_state else "❌")
+    col5, _ = st.columns(2)
+    col5.metric("障碍物数量", len(obstacles))
 
     with st.expander("📋 障碍物详细信息 (WGS-84)"):
         for i, obs in enumerate(obstacles):
