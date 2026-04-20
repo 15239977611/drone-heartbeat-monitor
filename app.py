@@ -3,41 +3,9 @@ import folium
 from streamlit_folium import st_folium
 import pandas as pd
 import time
-import math
 from datetime import datetime
 
-# ================== 坐标系转换 ==================
-def gcj02_to_wgs84(lat, lng):
-    a = 6378245.0
-    ee = 0.00669342162296594323
-
-    def transform_lat(x, y):
-        ret = -100.0 + 2.0 * x + 3.0 * y + 0.2 * y**2 + 0.1 * x * y + 0.2 * math.sqrt(abs(x))
-        ret += (20.0 * math.sin(6.0 * x * math.pi) + 20.0 * math.sin(2.0 * x * math.pi)) * 2.0 / 3.0
-        ret += (20.0 * math.sin(y * math.pi) + 40.0 * math.sin(y / 3.0 * math.pi)) * 2.0 / 3.0
-        ret += (160.0 * math.sin(y / 12.0 * math.pi) + 320.0 * math.sin(y / 30.0 * math.pi)) / 3.0
-        return ret
-
-    def transform_lng(x, y):
-        ret = 300.0 + x + 2.0 * y + 0.1 * x**2 + 0.1 * x * y + 0.1 * math.sqrt(abs(x))
-        ret += (20.0 * math.sin(6.0 * x * math.pi) + 20.0 * math.sin(2.0 * x * math.pi)) / 2.0
-        ret += (20.0 * math.sin(x * math.pi) + 40.0 * math.sin(x / 3.0 * math.pi)) / 3.0
-        ret += (150.0 * math.sin(x / 12.0 * math.pi) + 300.0 * math.sin(x / 30.0 * math.pi)) / 6.0
-        return ret
-
-    dlat = transform_lat(lng - 105.0, lat - 35.0)
-    dlng = transform_lng(lng - 105.0, lat - 35.0)
-    radlat = lat / 180.0 * math.pi
-    magic = math.sin(radlat)
-    magic = 1 - ee * magic * magic
-    sqrtmagic = math.sqrt(magic)
-    dlat = (dlat * 180.0) / ((a * (1 - ee)) / (magic * sqrtmagic) * math.pi)
-    dlng = (dlng * 180.0) / (a * sqrtmagic * math.cos(radlat) * math.pi)
-    mglat = lat + dlat
-    mglng = lng + dlng
-    return lat * 2 - mglat, lng * 2 - mglng
-
-# ================== 初始化（防报错） ==================
+# ================== 初始化 ==================
 if "point_a" not in st.session_state:
     st.session_state.point_a = None
 if "point_b" not in st.session_state:
@@ -48,8 +16,6 @@ if "heartbeat_data" not in st.session_state:
     st.session_state.heartbeat_data = pd.DataFrame(columns=["序号", "时间"])
 if "simulation_on" not in st.session_state:
     st.session_state.simulation_on = False
-if "coord_type" not in st.session_state:
-    st.session_state.coord_type = "GCJ-02"
 
 st.set_page_config(page_title="无人机航线", layout="wide")
 
@@ -57,11 +23,6 @@ st.set_page_config(page_title="无人机航线", layout="wide")
 with st.sidebar:
     st.title("导航")
     page = st.radio("选择页面", ["航线规划", "飞行监控"])
-
-    st.markdown("---")
-    st.subheader("坐标系")
-    coord_opt = st.radio("", ["GCJ-02(高德/百度)", "WGS-84"])
-    st.session_state.coord_type = "GCJ-02" if "GCJ" in coord_opt else "WGS-84"
 
     st.markdown("---")
     # 点击后选择A/B点
@@ -107,71 +68,67 @@ with st.sidebar:
     else:
         st.warning("未设置")
 
-# ================== 航线规划（稳定不闪烁） ==================
+# ================== 航线规划 ==================
 if page == "航线规划":
     st.title("🗺️ 卫星地图航线规划")
-    st.success("👉 点击地图 → 侧边栏设置A/B点")
+    st.success("👉 点击地图 → 侧边栏设置A/B点，点位百分百精准")
 
-    # 地图中心（不自动跳转）
+    # 固定中心，不跳动
     center_lat = 32.2330
     center_lng = 118.7490
-    if st.session_state.point_a:
-        center_lat, center_lng = st.session_state.point_a
-    elif st.session_state.point_b:
-        center_lat, center_lng = st.session_state.point_b
 
-    # 创建地图（禁用自动刷新 → 不闪烁）
+    # 地图
     m = folium.Map(
         location=[center_lat, center_lng],
         zoom_start=18,
         tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
-        attr="卫星地图",
-        control_scale=True
+        attr="卫星地图"
     )
 
-    # 坐标转换（精准）
-    def get_pos(pt):
-        if not pt:
-            return None
-        lat, lng = pt
-        if st.session_state.coord_type == "GCJ-02":
-            return gcj02_to_wgs84(lat, lng)
-        return (lat, lng)
-
-    a = get_pos(st.session_state.point_a)
-    b = get_pos(st.session_state.point_b)
-
-    # A点：绿色起点
-    if a:
+    # ========== A 点：绿色 + 大字 A 起点 ==========
+    if st.session_state.point_a:
+        lat_a, lng_a = st.session_state.point_a
         folium.CircleMarker(
-            location=a, radius=10, color="green", fill=True, fill_color="green", fill_opacity=1
+            location=(lat_a, lng_a), radius=8, color='green', fill=True, fill_color='green'
         ).add_to(m)
         folium.Marker(
-            location=a,
-            icon=folium.DivIcon(html='<div style="color:white; background:green; padding:2px 6px; border-radius:6px; font-weight:bold;">A 起点</div>')
+            location=(lat_a, lng_a),
+            icon=folium.DivIcon(
+                html='<div style="color:white; font-weight:bold; font-size:14px;">A 起点</div>'
+            )
         ).add_to(m)
 
-    # B点：红色终点
-    if b:
+    # ========== B 点：红色 + 大字 B 终点 ==========
+    if st.session_state.point_b:
+        lat_b, lng_b = st.session_state.point_b
         folium.CircleMarker(
-            location=b, radius=10, color="red", fill=True, fill_color="red", fill_opacity=1
+            location=(lat_b, lng_b), radius=8, color='red', fill=True, fill_color='red'
         ).add_to(m)
         folium.Marker(
-            location=b,
-            icon=folium.DivIcon(html='<div style="color:white; background:red; padding:2px 6px; border-radius:6px; font-weight:bold;">B 终点</div>')
+            location=(lat_b, lng_b),
+            icon=folium.DivIcon(
+                html='<div style="color:white; font-weight:bold; font-size:14px;">B 终点</div>'
+            )
         ).add_to(m)
 
     # 航线
-    if a and b:
-        folium.PolyLine([a, b], color="blue", weight=4).add_to(m)
+    if st.session_state.point_a and st.session_state.point_b:
+        folium.PolyLine(
+            locations=[st.session_state.point_a, st.session_state.point_b],
+            color='blue', weight=4
+        ).add_to(m)
 
-    # 渲染地图（关键：不刷新 → 不闪烁）
-    output = st_folium(m, key="drones_map", height=650, use_container_width=True, returned_objects=["last_clicked"])
+    # 稳定渲染，只接收点击，不刷新页面
+    map_out = st_folium(
+        m, key="drones_map", height=650,
+        use_container_width=True,
+        returned_objects=["last_clicked"]
+    )
 
-    # 接收点击（精准 + 不抖动）
-    if output and output.get("last_clicked"):
-        clat = round(output["last_clicked"]["lat"], 6)
-        clng = round(output["last_clicked"]["lng"], 6)
+    # 百分百精准捕获坐标
+    if map_out and map_out.get("last_clicked"):
+        clat = map_out["last_clicked"]["lat"]
+        clng = map_out["last_clicked"]["lng"]
         st.session_state.last_clicked = (clat, clng)
 
 # ================== 飞行监控 ==================
