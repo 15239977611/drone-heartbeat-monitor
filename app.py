@@ -32,12 +32,12 @@ with st.sidebar:
         
         col1, col2 = st.columns(2)
         with col1:
-            if st.button("✅ 设为A点"):
+            if st.button("✅ 设为 A 点"):
                 st.session_state.point_a = (lat, lng)
                 st.session_state.last_clicked = None
                 st.rerun()
         with col2:
-            if st.button("✅ 设为B点"):
+            if st.button("✅ 设为 B 点"):
                 st.session_state.point_b = (lat, lng)
                 st.session_state.last_clicked = None
                 st.rerun()
@@ -47,26 +47,26 @@ with st.sidebar:
             st.rerun()
 
     st.markdown("---")
-    st.subheader("A 点（起点）")
+    st.subheader("🟢 A 点（起点）")
     if st.session_state.point_a:
         st.success(f"纬度：{st.session_state.point_a[0]:.6f}")
         st.success(f"经度：{st.session_state.point_a[1]:.6f}")
-        if st.button("🗑️ 清除A点"):
+        if st.button("🗑️ 清除 A 点"):
             st.session_state.point_a = None
             st.rerun()
     else:
-        st.warning("未设置")
+        st.warning("未设置 A 点")
 
     st.markdown("---")
-    st.subheader("B 点（终点）")
+    st.subheader("🔴 B 点（终点）")
     if st.session_state.point_b:
         st.success(f"纬度：{st.session_state.point_b[0]:.6f}")
         st.success(f"经度：{st.session_state.point_b[1]:.6f}")
-        if st.button("🗑️ 清除B点"):
+        if st.button("🗑️ 清除 B 点"):
             st.session_state.point_b = None
             st.rerun()
     else:
-        st.warning("未设置")
+        st.warning("未设置 B 点")
 
 # ================== 航线规划 ==================
 if page == "航线规划":
@@ -94,7 +94,7 @@ if page == "航线规划":
         folium.Marker(
             location=(lat_a, lng_a),
             icon=folium.DivIcon(
-                html='<div style="color:white; font-weight:bold; font-size:14px;">A 起点</div>'
+                html='<div style="color:white; font-weight:bold; font-size:16px;">A 起点</div>'
             )
         ).add_to(m)
 
@@ -107,7 +107,7 @@ if page == "航线规划":
         folium.Marker(
             location=(lat_b, lng_b),
             icon=folium.DivIcon(
-                html='<div style="color:white; font-weight:bold; font-size:14px;">B 终点</div>'
+                html='<div style="color:white; font-weight:bold; font-size:16px;">B 终点</div>'
             )
         ).add_to(m)
 
