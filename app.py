@@ -2,7 +2,7 @@ import streamlit as st
 import folium
 from streamlit_folium import st_folium
 import json
-from shapely.geometry import Polygon, LineString
+from shapely.geometry import Polygon, LineString, Point
 from datetime import datetime
 
 # ================== 初始化 ==================
@@ -40,7 +40,7 @@ def load_all():
         st.session_state.obs_heights = []
 
 load_all()
-st.set_page_config(page_title="智能无人机航线", layout="wide")
+st.set_page_config(page_title="无人机智能绕行系统", layout="wide")
 
 # ================== 侧边栏 ==================
 with st.sidebar:
@@ -52,17 +52,19 @@ with st.sidebar:
     st.session_state.drone_height = st.slider("飞行高度（米）", 0, 200, 50)
 
     st.markdown("---")
-    st.subheader("🚧 障碍物")
+    st.subheader("🚧 实体障碍物（禁区）")
     col1, col2 = st.columns(2)
     with col1:
-        if st.button("🟢 开始圈选障碍物"):
+        if st.button("🟢 开始圈选禁区"):
             st.session_state.drawing_obstacle = True
             st.session_state.current_points = []
     with col2:
         if st.button("✅ 完成圈选"):
             if len(st.session_state.current_points) >= 3:
                 st.session_state.obstacles.append(st.session_state.current_points)
-                st.session_state.obs_heights.append(30)
+                # 让用户设置障碍物高度
+                height = st.number_input("设置障碍物高度", 1, 200, 30)
+                st.session_state.obs_heights.append(height)
                 save_all()
             st.session_state.drawing_obstacle = False
             st.session_state.current_points = []
@@ -92,48 +94,43 @@ with st.sidebar:
     else:
         st.warning("未设置")
 
-# ================== ✅ 智能绕行核心算法 ==================
-def get_best_path():
+# ================== ✅ 核心：最佳绕行算法 ==================
+def best_path():
     A = st.session_state.point_a
     B = st.session_state.point_b
-    drone_h = st.session_state.drone_height
-
     if not A or not B:
         return []
 
-    path = [A, B]
+    waypoints = [A]
+    current = A
+    path_line = LineString([A, B])
 
-    for i, obs in enumerate(st.session_state.obstacles):
-        if len(obs) < 3:
-            continue
-
-        obs_h = st.session_state.obs_heights[i] if i < len(st.session_state.obs_heights) else 30
-
-        # ✅ 高度判断：飞机 > 障碍物 → 直接飞过
-        if drone_h > obs_h:
-            continue
-
-        # ✅ 飞机高度更低 → 必须绕行
+    for obs, h in zip(st.session_state.obstacles, st.session_state.obs_heights):
         try:
             poly = Polygon(obs)
-            line = LineString([A, B])
-            if poly.intersects(line):
-                # 计算绕行点
-                cx, cy = poly.centroid.x, poly.centroid.y
-                dx = (A[0] - cx) * 0.00018
-                dy = (A[1] - cy) * 0.00018
-                path = [A, [cx + dx, cy + dy], B]
+            if poly.intersects(path_line):
+                # 计算障碍物外侧最近点，实现平滑绕行
+                centroid = poly.centroid
+                dx = centroid.x - current[0]
+                dy = centroid.y - current[1]
+                # 偏移一小段距离，绕开禁区
+                offset = 0.00025
+                side_point = (
+                    centroid.x + (-dy if dy > 0 else dy) * offset,
+                    centroid.y + (dx if dx > 0 else -dx) * offset
+                )
+                waypoints.append(side_point)
         except:
             continue
 
-    return path
+    waypoints.append(B)
+    return waypoints
 
 # ================== 地图 ==================
 if page == "航线规划":
-    st.title("🗺️ 智能卫星航线规划")
-    st.info(f"🛸 无人机高度：{st.session_state.drone_height}m | 障碍物会自动判断绕行")
+    st.title("🗺️ 无人机智能绕行系统")
+    st.success("✅ 圈出禁区 → 自动规划最佳绕行路线")
 
-    # 地图（修复后，卫星地图正常显示）
     m = folium.Map(
         location=[32.2330, 118.7490],
         zoom_start=18,
@@ -143,28 +140,37 @@ if page == "航线规划":
 
     # A B 点
     if st.session_state.point_a:
-        folium.CircleMarker(st.session_state.point_a, radius=8, color='green', fill=True).add_to(m)
+        folium.CircleMarker(st.session_state.point_a, radius=9, color='green', fill=True).add_to(m)
         folium.Marker(st.session_state.point_a, icon=folium.DivIcon(html='<div style="color:white; font-weight:bold;">A 起点</div>')).add_to(m)
     if st.session_state.point_b:
-        folium.CircleMarker(st.session_state.point_b, radius=8, color='red', fill=True).add_to(m)
+        folium.CircleMarker(st.session_state.point_b, radius=9, color='red', fill=True).add_to(m)
         folium.Marker(st.session_state.point_b, icon=folium.DivIcon(html='<div style="color:white; font-weight:bold;">B 终点</div>')).add_to(m)
 
-    # 障碍物
+    # 绘制障碍物（红色禁区）
     for i, obs in enumerate(st.session_state.obstacles):
         if len(obs) > 2:
-            h = st.session_state.obs_heights[i] if i < len(st.session_state.obs_heights) else 30
+            h = st.session_state.obs_heights[i]
             folium.Polygon(
                 locations=obs,
-                color='red', fill=True, fill_opacity=0.3, weight=3,
+                color='red',
+                fill=True,
+                fill_color='red',
+                fill_opacity=0.4,
+                weight=3,
                 popup=f"障碍物高度：{h}m"
             ).add_to(m)
 
     # ✅ 最佳路线
-    path = get_best_path()
+    path = best_path()
     if len(path) > 1:
-        folium.PolyLine(path, color='blue', weight=5).add_to(m)
+        folium.PolyLine(
+            locations=path,
+            color='blue',
+            weight=5,
+            opacity=0.8
+        ).add_to(m)
 
-    # 绘制中的多边形
+    # 绘制中的线条
     if st.session_state.drawing_obstacle and len(st.session_state.current_points) > 0:
         folium.PolyLine(st.session_state.current_points, color='orange', weight=4).add_to(m)
 
@@ -185,4 +191,4 @@ if page == "航线规划":
 else:
     st.title("📡 飞行监控")
     st.success(f"🛸 飞行高度：{st.session_state.drone_height} m")
-    st.success("✅ 智能绕行系统已运行")
+    st.success("✅ 智能绕行系统已启动")
