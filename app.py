@@ -319,8 +319,13 @@ if page=="航线规划":
         center = st.session_state.transformed_points["point_a"]
     elif st.session_state.point_a:
         center = st.session_state.point_a
-    m = folium.Map(location=center, zoom_start=18,
-                   tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}")
+    # 修复：添加 attr 参数（瓦片归属）
+    m = folium.Map(
+        location=center, 
+        zoom_start=18,
+        tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+        attr="Esri, DigitalGlobe, GeoEye, Earthstar Geographics, CNES/Airbus DS, USDA, USGS, AeroGRID, IGN, and the GIS User Community"
+    )
     # A
     a = st.session_state.transformed_points["point_a"] or st.session_state.point_a
     b = st.session_state.transformed_points["point_b"] or st.session_state.point_b
