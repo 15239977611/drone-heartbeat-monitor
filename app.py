@@ -5,7 +5,9 @@ import json
 from shapely.geometry import Polygon, LineString, Point, LinearRing
 from shapely.ops import nearest_points
 import math
-from datetime import datetime
+from datetime import datetime, timedelta
+import time
+import random
 
 # ================== 初始化 ==================
 if "point_a" not in st.session_state:
@@ -24,6 +26,21 @@ if "current_points" not in st.session_state:
     st.session_state.current_points = []
 if "drone_height" not in st.session_state:
     st.session_state.drone_height = 8  # 默认8米
+# 新增：心跳包相关状态
+if "drone_heartbeat" not in st.session_state:
+    st.session_state.drone_heartbeat = {
+        "last_time": datetime.now(),  # 最后心跳时间
+        "signal_strength": 95,       # 信号强度（0-100）
+        "battery": 88,               # 电量（0-100）
+        "gps_status": "正常",        # GPS状态
+        "flight_status": "待命",     # 飞行状态：待命/飞行中/绕飞中/异常
+        "latitude": 32.2330,         # 当前纬度
+        "longitude": 118.7490,       # 当前经度
+        "speed": 0.0,                # 飞行速度（m/s）
+        "heartbeat_interval": 1      # 心跳间隔（秒）
+    }
+if "heartbeat_log" not in st.session_state:
+    st.session_state.heartbeat_log = []  # 心跳日志
 
 # ================== 核心配置（地面高度=0米基准） ==================
 GROUND_HEIGHT = 0  # 地面基准高度
@@ -63,7 +80,7 @@ def load_all():
 load_all()
 st.set_page_config(page_title="无重叠精准避障无人机系统", layout="wide")
 
-# ================== 核心：无重叠避障+最短路径算法 ==================
+# ================== 核心：无重叠避障+最短路径算法（完全保留，不修改） ==================
 def calculate_no_overlap_route():
     """
     核心逻辑：
@@ -138,7 +155,63 @@ def calculate_no_overlap_route():
     
     return final_route, status
 
-# ================== 侧边栏（保留原有功能） ==================
+# ================== 新增：无人机心跳包更新函数 ==================
+def update_drone_heartbeat():
+    """模拟无人机心跳包数据更新（每1秒更新一次）"""
+    now = datetime.now()
+    # 计算心跳间隔
+    time_diff = (now - st.session_state.drone_heartbeat["last_time"]).total_seconds()
+    
+    # 每1秒更新一次心跳数据
+    if time_diff >= st.session_state.drone_heartbeat["heartbeat_interval"]:
+        # 模拟信号强度波动（±5）
+        new_signal = st.session_state.drone_heartbeat["signal_strength"] + random.randint(-5, 5)
+        st.session_state.drone_heartbeat["signal_strength"] = max(0, min(100, new_signal))
+        
+        # 模拟电量缓慢下降（每10秒降1%）
+        if random.randint(1, 10) == 5:
+            st.session_state.drone_heartbeat["battery"] = max(0, st.session_state.drone_heartbeat["battery"] - 1)
+        
+        # 模拟GPS状态（98%概率正常，2%概率弱信号）
+        if random.randint(1, 100) <= 2:
+            st.session_state.drone_heartbeat["gps_status"] = "弱信号"
+        else:
+            st.session_state.drone_heartbeat["gps_status"] = "正常"
+        
+        # 根据航线状态更新飞行状态
+        _, route_status = calculate_no_overlap_route()
+        if st.session_state.point_a and st.session_state.point_b:
+            if "绕行" in route_status:
+                st.session_state.drone_heartbeat["flight_status"] = "绕飞中"
+                st.session_state.drone_heartbeat["speed"] = round(random.uniform(3.0, 5.0), 1)  # 绕飞速度3-5m/s
+            else:
+                st.session_state.drone_heartbeat["flight_status"] = "飞行中"
+                st.session_state.drone_heartbeat["speed"] = round(random.uniform(5.0, 8.0), 1)  # 直飞速度5-8m/s
+        else:
+            st.session_state.drone_heartbeat["flight_status"] = "待命"
+            st.session_state.drone_heartbeat["speed"] = 0.0
+        
+        # 模拟位置小幅波动（贴近航线）
+        if st.session_state.drone_heartbeat["flight_status"] in ["飞行中", "绕飞中"]:
+            st.session_state.drone_heartbeat["latitude"] += random.uniform(-0.0001, 0.0001)
+            st.session_state.drone_heartbeat["longitude"] += random.uniform(-0.0001, 0.0001)
+        
+        # 更新最后心跳时间
+        st.session_state.drone_heartbeat["last_time"] = now
+        
+        # 记录心跳日志（保留最近20条）
+        heartbeat_log_entry = {
+            "time": now.strftime("%Y-%m-%d %H:%M:%S"),
+            "signal": st.session_state.drone_heartbeat["signal_strength"],
+            "battery": st.session_state.drone_heartbeat["battery"],
+            "gps": st.session_state.drone_heartbeat["gps_status"],
+            "status": st.session_state.drone_heartbeat["flight_status"]
+        }
+        st.session_state.heartbeat_log.append(heartbeat_log_entry)
+        if len(st.session_state.heartbeat_log) > 20:
+            st.session_state.heartbeat_log = st.session_state.heartbeat_log[-20:]
+
+# ================== 侧边栏（完全保留，不修改） ==================
 with st.sidebar:
     st.title("无人机无重叠避障系统")
     st.info(f"📌 地面基准高度：{GROUND_HEIGHT}米")
@@ -245,14 +318,14 @@ with st.sidebar:
         else:
             st.warning("未设置")
 
-# ================== 地图与航线展示（强化无重叠标注） ==================
+# ================== 航线规划页面（完全保留，不修改） ==================
 if page == "航线规划":
     st.title("🗺️ 无人机无重叠精准避障系统")
     
     # 计算无重叠避障路线
     route, route_status = calculate_no_overlap_route()
     
-    # 醒目显示状态（修复引号冲突问题！）
+    # 修复后的状态显示
     st.markdown(f"<h4 style='color:{'red' if '绕行' in route_status else 'green'};'>{route_status}</h4>", unsafe_allow_html=True)
 
     # 卫星地图（替换成你的地图中心坐标）
@@ -369,37 +442,145 @@ if page == "航线规划":
                 st.session_state.point_b = (lat, lng)
                 st.success(f"✅ 终点B已设置：({lat}, {lng})（地面基准：0米）")
 
-# ================== 飞行监控页面（强化无重叠状态） ==================
+# ================== 飞行监控页面（重点改造：新增心跳包） ==================
 else:
-    st.title("📡 无人机飞行监控中心（无重叠避障）")
+    # 实时更新心跳包数据
+    update_drone_heartbeat()
     
-    # 系统状态
-    st.subheader("✅ 实时状态（地面基准：0米）")
-    st.success(f"无人机地面以上高度：{st.session_state.drone_height} 米")
-    st.success(f"已圈选多边形障碍物数量：{len(st.session_state.obstacles_all)} 个")
+    st.title("📡 无人机飞行监控中心（含心跳包）")
     
-    # 避障提醒
-    avoid_count = sum(1 for h in st.session_state.obstacles_height if h > st.session_state.drone_height)
-    if avoid_count > 0:
-        st.error(f"🔴 发现 {avoid_count} 个障碍物高度超标，航线将「绝对不重叠」绕飞！")
-    else:
-        st.success(f"🟢 所有障碍物高度均达标，无人机将直线从A飞到B！")
+    # 新增：心跳包状态告警（顶部醒目显示）
+    heartbeat_status = "正常"
+    alert_color = "green"
+    alert_icon = "✅"
     
-    # 障碍物详情
-    if len(st.session_state.obstacles_all) > 0:
-        st.subheader("🌍 多边形障碍物详情（地面以上高度）")
-        for i in range(len(st.session_state.obstacles_all)):
-            obs_type = st.session_state.obstacles_type[i] if i < len(st.session_state.obstacles_type) else "自定义障碍物"
-            obs_h = st.session_state.obstacles_height[i] if i < len(st.session_state.obstacles_height) else 50
-            status = "🔴 无重叠绕飞" if obs_h > st.session_state.drone_height else "🟢 直线飞行"
-            st.info(f"{obs_type} {i+1}：高度 {obs_h} 米 → {status}（航线无重叠）")
-    else:
-        st.info("暂无多边形障碍物数据！")
+    # 心跳异常判断
+    time_since_last_heartbeat = (datetime.now() - st.session_state.drone_heartbeat["last_time"]).total_seconds()
+    if time_since_last_heartbeat > 3:
+        heartbeat_status = "心跳超时"
+        alert_color = "red"
+        alert_icon = "🔴"
+    elif st.session_state.drone_heartbeat["battery"] < 20:
+        heartbeat_status = "电量低"
+        alert_color = "orange"
+        alert_icon = "⚠️"
+    elif st.session_state.drone_heartbeat["signal_strength"] < 50:
+        heartbeat_status = "信号弱"
+        alert_color = "orange"
+        alert_icon = "⚠️"
+    elif st.session_state.drone_heartbeat["gps_status"] == "弱信号":
+        heartbeat_status = "GPS弱信号"
+        alert_color = "orange"
+        alert_icon = "⚠️"
     
-    # 航线策略
-    st.subheader("📍 航线策略")
-    if st.session_state.point_a and st.session_state.point_b:
-        _, route_status = calculate_no_overlap_route()
-        st.write(f"当前策略：{route_status}")
-    else:
-        st.warning("请先设置起点A和终点B！")
+    # 心跳状态告警栏
+    st.markdown(f"""
+    <div style='background-color:{alert_color}; color:white; padding:10px; border-radius:5px; text-align:center; font-size:18px; font-weight:bold;'>
+        {alert_icon} 无人机心跳状态：{heartbeat_status} | 最后心跳时间：{st.session_state.drone_heartbeat['last_time'].strftime('%Y-%m-%d %H:%M:%S')}
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # 分栏展示：左=心跳包核心数据，右=原有监控数据
+    col1, col2 = st.columns(2)
+    
+    # 左栏：无人机心跳包核心面板
+    with col1:
+        st.subheader("🫀 无人机心跳包数据（实时更新）")
+        
+        # 心跳核心指标卡片
+        card_style = """
+        <div style='background-color:#f0f2f6; padding:15px; border-radius:8px; margin-bottom:10px;'>
+            <span style='font-size:14px; color:#666;'>{label}</span><br>
+            <span style='font-size:24px; font-weight:bold; color:{color};'>{value}</span>
+        </div>
+        """
+        
+        # 信号强度
+        signal_color = "green" if st.session_state.drone_heartbeat["signal_strength"] >= 80 else "orange" if st.session_state.drone_heartbeat["signal_strength"] >= 50 else "red"
+        st.markdown(card_style.format(
+            label="信号强度",
+            color=signal_color,
+            value=f"{st.session_state.drone_heartbeat['signal_strength']}%"
+        ), unsafe_allow_html=True)
+        
+        # 电量
+        battery_color = "green" if st.session_state.drone_heartbeat["battery"] >= 50 else "orange" if st.session_state.drone_heartbeat["battery"] >= 20 else "red"
+        st.markdown(card_style.format(
+            label="剩余电量",
+            color=battery_color,
+            value=f"{st.session_state.drone_heartbeat['battery']}%"
+        ), unsafe_allow_html=True)
+        
+        # GPS状态
+        gps_color = "green" if st.session_state.drone_heartbeat["gps_status"] == "正常" else "red"
+        st.markdown(card_style.format(
+            label="GPS状态",
+            color=gps_color,
+            value=st.session_state.drone_heartbeat["gps_status"]
+        ), unsafe_allow_html=True)
+        
+        # 飞行状态
+        flight_color = "green" if st.session_state.drone_heartbeat["flight_status"] in ["飞行中", "绕飞中"] else "gray"
+        st.markdown(card_style.format(
+            label="飞行状态",
+            color=flight_color,
+            value=st.session_state.drone_heartbeat["flight_status"]
+        ), unsafe_allow_html=True)
+        
+        # 实时位置
+        st.markdown(card_style.format(
+            label="实时经纬度",
+            color="blue",
+            value=f"纬度：{st.session_state.drone_heartbeat['latitude']:.6f}<br>经度：{st.session_state.drone_heartbeat['longitude']:.6f}"
+        ), unsafe_allow_html=True)
+        
+        # 飞行速度
+        speed_color = "green" if st.session_state.drone_heartbeat["speed"] > 0 else "gray"
+        st.markdown(card_style.format(
+            label="飞行速度",
+            color=speed_color,
+            value=f"{st.session_state.drone_heartbeat['speed']} m/s"
+        ), unsafe_allow_html=True)
+        
+        # 心跳日志
+        st.subheader("📜 最近心跳日志（20条）")
+        log_df = st.dataframe(
+            st.session_state.heartbeat_log,
+            use_container_width=True,
+            hide_index=True
+        )
+    
+    # 右栏：原有飞行监控数据（完全保留）
+    with col2:
+        st.subheader("✅ 基础飞行状态（地面基准：0米）")
+        st.success(f"无人机地面以上高度：{st.session_state.drone_height} 米")
+        st.success(f"已圈选多边形障碍物数量：{len(st.session_state.obstacles_all)} 个")
+        
+        # 避障提醒
+        avoid_count = sum(1 for h in st.session_state.obstacles_height if h > st.session_state.drone_height)
+        if avoid_count > 0:
+            st.error(f"🔴 发现 {avoid_count} 个障碍物高度超标，航线将「绝对不重叠」绕飞！")
+        else:
+            st.success(f"🟢 所有障碍物高度均达标，无人机将直线从A飞到B！")
+        
+        # 障碍物详情
+        if len(st.session_state.obstacles_all) > 0:
+            st.subheader("🌍 多边形障碍物详情（地面以上高度）")
+            for i in range(len(st.session_state.obstacles_all)):
+                obs_type = st.session_state.obstacles_type[i] if i < len(st.session_state.obstacles_type) else "自定义障碍物"
+                obs_h = st.session_state.obstacles_height[i] if i < len(st.session_state.obstacles_height) else 50
+                status = "🔴 无重叠绕飞" if obs_h > st.session_state.drone_height else "🟢 直线飞行"
+                st.info(f"{obs_type} {i+1}：高度 {obs_h} 米 → {status}（航线无重叠）")
+        else:
+            st.info("暂无多边形障碍物数据！")
+        
+        # 航线策略
+        st.subheader("📍 航线策略")
+        if st.session_state.point_a and st.session_state.point_b:
+            _, route_status = calculate_no_overlap_route()
+            st.write(f"当前策略：{route_status}")
+        else:
+            st.warning("请先设置起点A和终点B！")
+    
+    # 自动刷新（每1秒刷新一次，保持心跳包实时更新）
+    st.autorefresh(interval=1000, limit=None, key="heartbeat_refresh")
