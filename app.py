@@ -252,8 +252,8 @@ if page == "航线规划":
     # 计算无重叠避障路线
     route, route_status = calculate_no_overlap_route()
     
-    # 醒目显示状态
-    st.markdown(f"<h4 style='color:{"red" if "绕行" in route_status else "green"};'>{route_status}</h4>", unsafe_allow_html=True)
+    # 醒目显示状态（修复引号冲突问题！）
+    st.markdown(f"<h4 style='color:{'red' if '绕行' in route_status else 'green'};'>{route_status}</h4>", unsafe_allow_html=True)
 
     # 卫星地图（替换成你的地图中心坐标）
     m = folium.Map(
