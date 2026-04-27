@@ -86,6 +86,9 @@ if "current_points" not in st.session_state:
     st.session_state.current_points = []
 if "drone_height" not in st.session_state:
     st.session_state.drone_height = 8  # 默认8米
+# 新增：无人机安全半径初始化
+if "drone_safety_radius" not in st.session_state:
+    st.session_state.drone_safety_radius = 15  # 默认15米
 # 心跳包状态
 if "drone_heartbeat" not in st.session_state:
     st.session_state.drone_heartbeat = {
@@ -118,7 +121,11 @@ if "transformed_points" not in st.session_state:
 
 # ================== 核心配置 ==================
 GROUND_HEIGHT = 0  # 地面基准高度
-SAFE_DISTANCE = 0.00015  # 安全距离（约15米），保证不重叠且不绕远
+# 修改：安全距离从固定值改为基于安全半径的动态计算（经纬度单位，1米≈0.00001）
+def get_safe_distance():
+    """根据安全半径计算经纬度单位的安全距离"""
+    return st.session_state.drone_safety_radius * 0.00001
+
 REAL_WORLD_HEIGHTS = {
     "自定义障碍物": 50,
     "普通房屋": 20,
@@ -164,6 +171,7 @@ def calculate_shortest_no_overlap_route():
     1. 先找A到B的直线，判断是否碰撞
     2. 碰撞时计算「最短切线点」，只绕障碍物边缘最短路径
     3. 多次迭代优化，保证整体路径最短且无重叠
+    4. 新增：基于安全半径动态调整绕行距离
     """
     # 优先使用转换后的坐标
     A = st.session_state.transformed_points["point_a"] or st.session_state.point_a
@@ -173,6 +181,8 @@ def calculate_shortest_no_overlap_route():
         return [], "未设置起点A/终点B（地面基准：0米）"
     
     drone_h = st.session_state.drone_height
+    # 新增：获取动态安全距离
+    SAFE_DISTANCE = get_safe_distance()
     final_route = [A]
     avoid_obstacles = []
     
@@ -193,8 +203,9 @@ def calculate_shortest_no_overlap_route():
         
         avoid_obstacles.append(obs_type)
         obs_poly = Polygon(obs_coords)
-        # 仅小幅扩大（保证不重叠即可，避免绕远）
-        obs_poly_scaled = scale(obs_poly, xfact=1.02, yfact=1.02, origin='centroid')
+        # 修改：基于安全半径动态扩大障碍物多边形（避免重叠）
+        scale_factor = 1.0 + (st.session_state.drone_safety_radius / 1000)  # 按安全半径比例扩大
+        obs_poly_scaled = scale(obs_poly, xfact=scale_factor, yfact=scale_factor, origin='centroid')
         obstacle_polygons.append({
             "poly": obs_poly,
             "scaled_poly": obs_poly_scaled,
@@ -206,7 +217,7 @@ def calculate_shortest_no_overlap_route():
     if not obstacle_polygons:
         # 无需要避开的障碍物，直接直线飞行（最短路径）
         final_route = [A, B]
-        status = f"🟢 最短直线飞行！无人机高度({drone_h}m) ≥ 所有障碍物高度，直接从A到B"
+        status = f"🟢 最短直线飞行！无人机高度({drone_h}m) ≥ 所有障碍物高度，直接从A到B（安全半径：{st.session_state.drone_safety_radius}米）"
         return final_route, status
     
     # ========== 核心：最短切线绕行逻辑 ==========
@@ -252,7 +263,7 @@ def calculate_shortest_no_overlap_route():
         dx /= dist
         dy /= dist
         
-        # 计算最短绕行点（仅偏移安全距离，不绕远）
+        # 修改：使用动态安全距离计算绕行点
         shortest_avoid_point = (
             obs_point.x + dx * SAFE_DISTANCE,
             obs_point.y + dy * SAFE_DISTANCE
@@ -297,7 +308,7 @@ def calculate_shortest_no_overlap_route():
                 dist = math.hypot(dx, dy) or 1
                 dx /= dist
                 dy /= dist
-                # 最小偏移量，保证不重叠即可
+                # 修改：使用动态安全距离
                 new_avoid_point = (
                     mid_point[0] + dx * SAFE_DISTANCE,
                     mid_point[1] + dy * SAFE_DISTANCE
@@ -311,7 +322,7 @@ def calculate_shortest_no_overlap_route():
         total_distance += calculate_distance(final_route[i], final_route[i+1])
     total_distance_km = total_distance * 111  # 经纬度距离转公里（近似）
     
-    status = f"🔴 最短无重叠绕行！无人机高度({drone_h}m) < 障碍物高度，已避开：{','.join(avoid_obstacles)}，总路径长度≈{total_distance_km:.3f}公里（仅贴障碍物边缘绕行）"
+    status = f"🔴 最短无重叠绕行！无人机高度({drone_h}m) < 障碍物高度，已避开：{','.join(avoid_obstacles)}，总路径长度≈{total_distance_km:.3f}公里（安全半径：{st.session_state.drone_safety_radius}米，仅贴障碍物边缘最短绕行）"
     return final_route, status
 
 # ================== 心跳包更新函数 ==================
@@ -465,18 +476,26 @@ with st.sidebar:
 
     # 无人机高度设置
     st.markdown("---")
-    st.subheader("🛸 无人机飞行高度（地面以上）")
+    st.subheader("🛸 无人机飞行参数")
     st.session_state.drone_height = st.slider(
-        "设置地面以上飞行高度（米）",
+        "飞行高度（地面以上/米）",
         min_value=0, max_value=200, value=8, step=1,
         key="drone_height_slider"
     )
-    st.caption(f"当前：{st.session_state.drone_height}米（地面以上）")
+    st.caption(f"当前高度：{st.session_state.drone_height}米")
+    
+    # 新增：无人机安全半径设置
+    st.session_state.drone_safety_radius = st.slider(
+        "安全半径（与障碍物最小距离/米）",
+        min_value=1, max_value=50, value=15, step=1,
+        key="drone_safety_radius_slider"
+    )
+    st.caption(f"当前安全半径：{st.session_state.drone_safety_radius}米")
 
     # 障碍物圈选
     st.markdown("---")
     st.subheader("🌍 多边形障碍物圈选")
-    st.warning("⚠️ 高度超标时，航线沿障碍物边缘最短路径绕行！")
+    st.warning(f"⚠️ 高度超标时，航线沿障碍物边缘{st.session_state.drone_safety_radius}米安全距离绕行！")
     
     draw_type = st.selectbox(
         "选择障碍物类型（匹配真实高度）",
@@ -532,7 +551,7 @@ with st.sidebar:
                 st.session_state.obstacles_height[i] = new_h
                 save_all()
                 if new_h > st.session_state.drone_height:
-                    st.error(f"⚠️ 高度({new_h}m) > 无人机({st.session_state.drone_height}m) → 最短路径绕行！")
+                    st.error(f"⚠️ 高度({new_h}m) > 无人机({st.session_state.drone_height}m) → 最短路径绕行（安全半径{st.session_state.drone_safety_radius}米）！")
                 else:
                     st.success(f"✅ 高度({new_h}m) ≤ 无人机 → 直线飞行！")
     else:
@@ -579,7 +598,7 @@ if page == "航线规划":
     
     # 显示当前坐标系状态
     current_coord = st.session_state.coord_system
-    st.markdown(f"<div style='background-color:#e3f2fd; padding:8px; border-radius:5px;'>📌 当前使用坐标系：{current_coord}</div>", unsafe_allow_html=True)
+    st.markdown(f"<div style='background-color:#e3f2fd; padding:8px; border-radius:5px;'>📌 当前使用坐标系：{current_coord} | 无人机安全半径：{st.session_state.drone_safety_radius}米</div>", unsafe_allow_html=True)
     
     # 计算最短避障路线
     route, route_status = calculate_shortest_no_overlap_route()
@@ -604,7 +623,7 @@ if page == "航线规划":
         folium.CircleMarker(
             location=st.session_state.transformed_points["point_a"],
             radius=12, color='green', fill=True, fill_color='green', fill_opacity=0.8,
-            popup=f"起点A（{current_coord}）<br>地面基准：{GROUND_HEIGHT}米"
+            popup=f"起点A（{current_coord}）<br>地面基准：{GROUND_HEIGHT}米<br>安全半径：{st.session_state.drone_safety_radius}米"
         ).add_to(m)
         folium.Marker(
             location=st.session_state.transformed_points["point_a"],
@@ -614,7 +633,7 @@ if page == "航线规划":
         folium.CircleMarker(
             location=st.session_state.point_a,
             radius=12, color='green', fill=True, fill_color='green', fill_opacity=0.8,
-            popup=f"起点A（WGS84）<br>地面基准：{GROUND_HEIGHT}米"
+            popup=f"起点A（WGS84）<br>地面基准：{GROUND_HEIGHT}米<br>安全半径：{st.session_state.drone_safety_radius}米"
         ).add_to(m)
         folium.Marker(
             location=st.session_state.point_a,
@@ -626,7 +645,7 @@ if page == "航线规划":
         folium.CircleMarker(
             location=st.session_state.transformed_points["point_b"],
             radius=12, color='red', fill=True, fill_color='red', fill_opacity=0.8,
-            popup=f"终点B（{current_coord}）<br>地面基准：{GROUND_HEIGHT}米"
+            popup=f"终点B（{current_coord}）<br>地面基准：{GROUND_HEIGHT}米<br>安全半径：{st.session_state.drone_safety_radius}米"
         ).add_to(m)
         folium.Marker(
             location=st.session_state.transformed_points["point_b"],
@@ -636,7 +655,7 @@ if page == "航线规划":
         folium.CircleMarker(
             location=st.session_state.point_b,
             radius=12, color='red', fill=True, fill_color='red', fill_opacity=0.8,
-            popup=f"终点B（WGS84）<br>地面基准：{GROUND_HEIGHT}米"
+            popup=f"终点B（WGS84）<br>地面基准：{GROUND_HEIGHT}米<br>安全半径：{st.session_state.drone_safety_radius}米"
         ).add_to(m)
         folium.Marker(
             location=st.session_state.point_b,
@@ -662,7 +681,7 @@ if page == "航线规划":
             
             fill_opacity = 0.5 if obs_h > st.session_state.drone_height else 0.2
             weight = 6 if obs_h > st.session_state.drone_height else 3
-            status_text = "最短路径绕行" if obs_h > st.session_state.drone_height else "可直飞"
+            status_text = f"最短路径绕行（安全半径{st.session_state.drone_safety_radius}米）" if obs_h > st.session_state.drone_height else "可直飞"
             
             folium.Polygon(
                 locations=obs,
@@ -680,7 +699,7 @@ if page == "航线规划":
         folium.PolyLine(
             locations=st.session_state.current_points,
             color=color, weight=5, dash_array='5,5',
-            popup=f"正在绘制：{draw_type}（多边形，WGS84）"
+            popup=f"正在绘制：{draw_type}（多边形，WGS84）<br>安全半径：{st.session_state.drone_safety_radius}米"
         ).add_to(m)
         for idx, p in enumerate(st.session_state.current_points):
             folium.CircleMarker(
@@ -697,10 +716,11 @@ if page == "航线规划":
             tooltip="最短无重叠避障航线"
         ).add_to(m)
         # 标记绕行点（仅显示必要的切点）
+        SAFE_DISTANCE = get_safe_distance()
         for idx, point in enumerate(route[1:-1]):
             folium.CircleMarker(
                 location=point, radius=8, color='blue', fill=True, fill_color='yellow',
-                popup=f"最短绕行点 {idx+1}（{current_coord}，障碍物外{SAFE_DISTANCE*100000:.1f}米）"
+                popup=f"最短绕行点 {idx+1}（{current_coord}，障碍物外{SAFE_DISTANCE*100000:.1f}米）<br>安全半径：{st.session_state.drone_safety_radius}米"
             ).add_to(m)
 
     # 地图交互
@@ -828,11 +848,13 @@ else:
     with col2:
         st.subheader("✅ 基础飞行状态")
         st.success(f"无人机地面以上高度：{st.session_state.drone_height} 米")
+        # 新增：显示安全半径
+        st.success(f"无人机安全半径：{st.session_state.drone_safety_radius} 米")
         st.success(f"已圈选多边形障碍物数量：{len(st.session_state.obstacles_all)} 个")
         
         avoid_count = sum(1 for h in st.session_state.obstacles_height if h > st.session_state.drone_height)
         if avoid_count > 0:
-            st.error(f"🔴 发现 {avoid_count} 个障碍物高度超标，航线将沿边缘「最短路径」绕飞！")
+            st.error(f"🔴 发现 {avoid_count} 个障碍物高度超标，航线将沿边缘「最短路径」绕飞（安全半径{st.session_state.drone_safety_radius}米）！")
         else:
             st.success(f"🟢 所有障碍物高度均达标，无人机将直线从A到B（最短路径）！")
         
@@ -841,7 +863,7 @@ else:
             for i in range(len(st.session_state.obstacles_all)):
                 obs_type = st.session_state.obstacles_type[i] if i < len(st.session_state.obstacles_type) else "自定义障碍物"
                 obs_h = st.session_state.obstacles_height[i] if i < len(st.session_state.obstacles_height) else 50
-                status = "🔴 最短绕飞" if obs_h > st.session_state.drone_height else "🟢 直飞"
+                status = f"🔴 最短绕飞（安全半径{st.session_state.drone_safety_radius}米）" if obs_h > st.session_state.drone_height else "🟢 直飞"
                 st.info(f"{obs_type} {i+1}：{obs_h}米 → {status}")
         else:
             st.info("暂无障碍物数据！")
