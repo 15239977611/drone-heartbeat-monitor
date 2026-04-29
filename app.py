@@ -86,9 +86,6 @@ if "current_points" not in st.session_state:
     st.session_state.current_points = []
 if "drone_height" not in st.session_state:
     st.session_state.drone_height = 8  # 默认8米
-# 新增：无人机安全半径初始化
-if "drone_safety_radius" not in st.session_state:
-    st.session_state.drone_safety_radius = 15  # 默认15米
 # 心跳包状态
 if "drone_heartbeat" not in st.session_state:
     st.session_state.drone_heartbeat = {
@@ -121,11 +118,7 @@ if "transformed_points" not in st.session_state:
 
 # ================== 核心配置 ==================
 GROUND_HEIGHT = 0  # 地面基准高度
-# 修改：安全距离从固定值改为基于安全半径的动态计算（经纬度单位，1米≈0.00001）
-def get_safe_distance():
-    """根据安全半径计算经纬度单位的安全距离"""
-    return st.session_state.drone_safety_radius * 0.00001
-
+SAFE_DISTANCE = 0.00015  # 安全距离（约15米），保证不重叠且不绕远
 REAL_WORLD_HEIGHTS = {
     "自定义障碍物": 50,
     "普通房屋": 20,
@@ -171,7 +164,6 @@ def calculate_shortest_no_overlap_route():
     1. 先找A到B的直线，判断是否碰撞
     2. 碰撞时计算「最短切线点」，只绕障碍物边缘最短路径
     3. 多次迭代优化，保证整体路径最短且无重叠
-    4. 新增：基于安全半径动态调整绕行距离
     """
     # 优先使用转换后的坐标
     A = st.session_state.transformed_points["point_a"] or st.session_state.point_a
@@ -181,8 +173,6 @@ def calculate_shortest_no_overlap_route():
         return [], "未设置起点A/终点B（地面基准：0米）"
     
     drone_h = st.session_state.drone_height
-    # 新增：获取动态安全距离
-    SAFE_DISTANCE = get_safe_distance()
     final_route = [A]
     avoid_obstacles = []
     
@@ -203,9 +193,8 @@ def calculate_shortest_no_overlap_route():
         
         avoid_obstacles.append(obs_type)
         obs_poly = Polygon(obs_coords)
-        # 修改：基于安全半径动态扩大障碍物多边形（避免重叠）
-        scale_factor = 1.0 + (st.session_state.drone_safety_radius / 1000)  # 按安全半径比例扩大
-        obs_poly_scaled = scale(obs_poly, xfact=scale_factor, yfact=scale_factor, origin='centroid')
+        # 仅小幅扩大（保证不重叠即可，避免绕远）
+        obs_poly_scaled = scale(obs_poly, xfact=1.02, yfact=1.02, origin='centroid')
         obstacle_polygons.append({
             "poly": obs_poly,
             "scaled_poly": obs_poly_scaled,
@@ -217,7 +206,7 @@ def calculate_shortest_no_overlap_route():
     if not obstacle_polygons:
         # 无需要避开的障碍物，直接直线飞行（最短路径）
         final_route = [A, B]
-        status = f"🟢 最短直线飞行！无人机高度({drone_h}m) ≥ 所有障碍物高度，直接从A到B（安全半径：{st.session_state.drone_safety_radius}米）"
+        status = f"🟢 最短直线飞行！无人机高度({drone_h}m) ≥ 所有障碍物高度，直接从A到B"
         return final_route, status
     
     # ========== 核心：最短切线绕行逻辑 ==========
@@ -263,7 +252,7 @@ def calculate_shortest_no_overlap_route():
         dx /= dist
         dy /= dist
         
-        # 修改：使用动态安全距离计算绕行点
+        # 计算最短绕行点（仅偏移安全距离，不绕远）
         shortest_avoid_point = (
             obs_point.x + dx * SAFE_DISTANCE,
             obs_point.y + dy * SAFE_DISTANCE
@@ -308,7 +297,7 @@ def calculate_shortest_no_overlap_route():
                 dist = math.hypot(dx, dy) or 1
                 dx /= dist
                 dy /= dist
-                # 修改：使用动态安全距离
+                # 最小偏移量，保证不重叠即可
                 new_avoid_point = (
                     mid_point[0] + dx * SAFE_DISTANCE,
                     mid_point[1] + dy * SAFE_DISTANCE
@@ -322,7 +311,7 @@ def calculate_shortest_no_overlap_route():
         total_distance += calculate_distance(final_route[i], final_route[i+1])
     total_distance_km = total_distance * 111  # 经纬度距离转公里（近似）
     
-    status = f"🔴 最短无重叠绕行！无人机高度({drone_h}m) < 障碍物高度，已避开：{','.join(avoid_obstacles)}，总路径长度≈{total_distance_km:.3f}公里（安全半径：{st.session_state.drone_safety_radius}米，仅贴障碍物边缘最短绕行）"
+    status = f"🔴 最短无重叠绕行！无人机高度({drone_h}m) < 障碍物高度，已避开：{','.join(avoid_obstacles)}，总路径长度≈{total_distance_km:.3f}公里（仅贴障碍物边缘绕行）"
     return final_route, status
 
 # ================== 心跳包更新函数 ==================
@@ -476,26 +465,18 @@ with st.sidebar:
 
     # 无人机高度设置
     st.markdown("---")
-    st.subheader("🛸 无人机飞行参数")
+    st.subheader("🛸 无人机飞行高度（地面以上）")
     st.session_state.drone_height = st.slider(
-        "飞行高度（地面以上/米）",
+        "设置地面以上飞行高度（米）",
         min_value=0, max_value=200, value=8, step=1,
         key="drone_height_slider"
     )
-    st.caption(f"当前高度：{st.session_state.drone_height}米")
-    
-    # 新增：无人机安全半径设置
-    st.session_state.drone_safety_radius = st.slider(
-        "安全半径（与障碍物最小距离/米）",
-        min_value=1, max_value=50, value=15, step=1,
-        key="drone_safety_radius_slider"
-    )
-    st.caption(f"当前安全半径：{st.session_state.drone_safety_radius}米")
+    st.caption(f"当前：{st.session_state.drone_height}米（地面以上）")
 
     # 障碍物圈选
     st.markdown("---")
     st.subheader("🌍 多边形障碍物圈选")
-    st.warning(f"⚠️ 高度超标时，航线沿障碍物边缘{st.session_state.drone_safety_radius}米安全距离绕行！")
+    st.warning("⚠️ 高度超标时，航线沿障碍物边缘最短路径绕行！")
     
     draw_type = st.selectbox(
         "选择障碍物类型（匹配真实高度）",
@@ -533,3 +514,356 @@ with st.sidebar:
         st.success("✅ 所有障碍物已清空！")
 
     # 障碍物高度自定义
+    st.markdown("---")
+    st.subheader("📏 障碍物高度自定义（地面以上）")
+    if len(st.session_state.obstacles_all) > 0:
+        for i in range(len(st.session_state.obstacles_all)):
+            obs_type = st.session_state.obstacles_type[i] if i < len(st.session_state.obstacles_type) else "自定义障碍物"
+            current_h = st.session_state.obstacles_height[i] if i < len(st.session_state.obstacles_height) else REAL_WORLD_HEIGHTS[obs_type]
+            
+            st.write(f"📌 {obs_type} {i+1}")
+            new_h = st.slider(
+                f"高度（米）",
+                min_value=0, max_value=200, value=current_h, step=1,
+                key=f"obs_{i}_height",
+                label_visibility="collapsed"
+            )
+            if i < len(st.session_state.obstacles_height):
+                st.session_state.obstacles_height[i] = new_h
+                save_all()
+                if new_h > st.session_state.drone_height:
+                    st.error(f"⚠️ 高度({new_h}m) > 无人机({st.session_state.drone_height}m) → 最短路径绕行！")
+                else:
+                    st.success(f"✅ 高度({new_h}m) ≤ 无人机 → 直线飞行！")
+    else:
+        st.info("暂无障碍物，先圈选地图上的多边形物体")
+
+    # A/B点管理
+    st.markdown("---")
+    st.subheader("📍 航线起点/终点")
+    col_a, col_b = st.columns(2)
+    with col_a:
+        st.subheader("🟢 起点A")
+        if st.session_state.transformed_points["point_a"]:
+            st.success(f"转换后纬度：{st.session_state.transformed_points['point_a'][0]:.6f}")
+            st.success(f"转换后经度：{st.session_state.transformed_points['point_a'][1]:.6f}")
+            if st.session_state.point_a:
+                st.caption(f"原始：({st.session_state.point_a[0]:.6f}, {st.session_state.point_a[1]:.6f})")
+        elif st.session_state.point_a:
+            st.success(f"纬度：{st.session_state.point_a[0]:.6f}")
+            st.success(f"经度：{st.session_state.point_a[1]:.6f}")
+        else:
+            st.warning("未设置")
+        if st.button("清除A点", key="clear_a"):
+            st.session_state.point_a = None
+            st.session_state.transformed_points["point_a"] = None
+    with col_b:
+        st.subheader("🔴 终点B")
+        if st.session_state.transformed_points["point_b"]:
+            st.success(f"转换后纬度：{st.session_state.transformed_points['point_b'][0]:.6f}")
+            st.success(f"转换后经度：{st.session_state.transformed_points['point_b'][1]:.6f}")
+            if st.session_state.point_b:
+                st.caption(f"原始：({st.session_state.point_b[0]:.6f}, {st.session_state.point_b[1]:.6f})")
+        elif st.session_state.point_b:
+            st.success(f"纬度：{st.session_state.point_b[0]:.6f}")
+            st.success(f"经度：{st.session_state.point_b[1]:.6f}")
+        else:
+            st.warning("未设置")
+        if st.button("清除B点", key="clear_b"):
+            st.session_state.point_b = None
+            st.session_state.transformed_points["point_b"] = None
+
+# ================== 航线规划页面 ==================
+if page == "航线规划":
+    st.title("🗺️ 无人机最短无重叠精准避障系统")
+    
+    # 显示当前坐标系状态
+    current_coord = st.session_state.coord_system
+    st.markdown(f"<div style='background-color:#e3f2fd; padding:8px; border-radius:5px;'>📌 当前使用坐标系：{current_coord}</div>", unsafe_allow_html=True)
+    
+    # 计算最短避障路线
+    route, route_status = calculate_shortest_no_overlap_route()
+    st.markdown(f"<h4 style='color:{'red' if '绕行' in route_status else 'green'};'>{route_status}</h4>", unsafe_allow_html=True)
+
+    # 地图显示
+    center_lat, center_lng = 32.2330, 118.7490
+    if st.session_state.transformed_points["point_a"]:
+        center_lat, center_lng = st.session_state.transformed_points["point_a"]
+    elif st.session_state.point_a:
+        center_lat, center_lng = st.session_state.point_a
+    
+    m = folium.Map(
+        location=[center_lat, center_lng],
+        zoom_start=18,
+        tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+        attr="Esri World Imagery"
+    )
+
+    # 绘制起点A
+    if st.session_state.transformed_points["point_a"]:
+        folium.CircleMarker(
+            location=st.session_state.transformed_points["point_a"],
+            radius=12, color='green', fill=True, fill_color='green', fill_opacity=0.8,
+            popup=f"起点A（{current_coord}）<br>地面基准：{GROUND_HEIGHT}米"
+        ).add_to(m)
+        folium.Marker(
+            location=st.session_state.transformed_points["point_a"],
+            icon=folium.DivIcon(html='<div style="color:white; font-weight:bold; font-size:14px; background:green; padding:2px;">A 起点</div>')
+        ).add_to(m)
+    elif st.session_state.point_a:
+        folium.CircleMarker(
+            location=st.session_state.point_a,
+            radius=12, color='green', fill=True, fill_color='green', fill_opacity=0.8,
+            popup=f"起点A（WGS84）<br>地面基准：{GROUND_HEIGHT}米"
+        ).add_to(m)
+        folium.Marker(
+            location=st.session_state.point_a,
+            icon=folium.DivIcon(html='<div style="color:white; font-weight:bold; font-size:14px; background:green; padding:2px;">A 起点</div>')
+        ).add_to(m)
+
+    # 绘制终点B
+    if st.session_state.transformed_points["point_b"]:
+        folium.CircleMarker(
+            location=st.session_state.transformed_points["point_b"],
+            radius=12, color='red', fill=True, fill_color='red', fill_opacity=0.8,
+            popup=f"终点B（{current_coord}）<br>地面基准：{GROUND_HEIGHT}米"
+        ).add_to(m)
+        folium.Marker(
+            location=st.session_state.transformed_points["point_b"],
+            icon=folium.DivIcon(html='<div style="color:white; font-weight:bold; font-size:14px; background:red; padding:2px;">B 终点</div>')
+        ).add_to(m)
+    elif st.session_state.point_b:
+        folium.CircleMarker(
+            location=st.session_state.point_b,
+            radius=12, color='red', fill=True, fill_color='red', fill_opacity=0.8,
+            popup=f"终点B（WGS84）<br>地面基准：{GROUND_HEIGHT}米"
+        ).add_to(m)
+        folium.Marker(
+            location=st.session_state.point_b,
+            icon=folium.DivIcon(html='<div style="color:white; font-weight:bold; font-size:14px; background:red; padding:2px;">B 终点</div>')
+        ).add_to(m)
+
+    # 绘制障碍物
+    TYPE_COLORS = {
+        "自定义障碍物": "darkred",
+        "普通房屋": "orange",
+        "高层楼房": "darkblue",
+        "大树/电线杆": "darkgreen",
+        "操场/空地": "gray",
+        "桥梁/高架": "purple",
+        "塔楼/信号塔": "brown"
+    }
+    obstacles = st.session_state.transformed_points["obstacles"] or st.session_state.obstacles_all
+    for i, obs in enumerate(obstacles):
+        if len(obs) > 2:
+            obs_type = st.session_state.obstacles_type[i] if i < len(st.session_state.obstacles_type) else "自定义障碍物"
+            obs_h = st.session_state.obstacles_height[i] if i < len(st.session_state.obstacles_height) else REAL_WORLD_HEIGHTS[obs_type]
+            color = TYPE_COLORS.get(obs_type, "darkred")
+            
+            fill_opacity = 0.5 if obs_h > st.session_state.drone_height else 0.2
+            weight = 6 if obs_h > st.session_state.drone_height else 3
+            status_text = "最短路径绕行" if obs_h > st.session_state.drone_height else "可直飞"
+            
+            folium.Polygon(
+                locations=obs,
+                color=color, fill=True, fill_color=color, fill_opacity=fill_opacity,
+                weight=weight, 
+                popup=f"{obs_type} | 地面以上高度：{obs_h}米<br>无人机高度：{st.session_state.drone_height}米<br>状态：{status_text}（绝对无重叠）<br>坐标系：{current_coord}",
+                tooltip=f"{obs_type}（{obs_h}米，{status_text}）"
+            ).add_to(m)
+
+    # 绘制正在圈选的多边形
+    if st.session_state.drawing_mode and len(st.session_state.current_points) > 0:
+        draw_type = st.session_state.drawing_mode
+        color = TYPE_COLORS.get(draw_type, "orange")
+        
+        folium.PolyLine(
+            locations=st.session_state.current_points,
+            color=color, weight=5, dash_array='5,5',
+            popup=f"正在绘制：{draw_type}（多边形，WGS84）"
+        ).add_to(m)
+        for idx, p in enumerate(st.session_state.current_points):
+            folium.CircleMarker(
+                location=p, radius=6, color=color, fill=True,
+                popup=f"顶点 {idx+1}（WGS84）"
+            ).add_to(m)
+
+    # 绘制最短避障航线
+    if len(route) >= 2:
+        folium.PolyLine(
+            locations=route,
+            color='blue', weight=8, opacity=0.9,
+            popup=f"{route_status}<br>坐标系：{current_coord}",
+            tooltip="最短无重叠避障航线"
+        ).add_to(m)
+        # 标记绕行点（仅显示必要的切点）
+        for idx, point in enumerate(route[1:-1]):
+            folium.CircleMarker(
+                location=point, radius=8, color='blue', fill=True, fill_color='yellow',
+                popup=f"最短绕行点 {idx+1}（{current_coord}，障碍物外{SAFE_DISTANCE*100000:.1f}米）"
+            ).add_to(m)
+
+    # 地图交互
+    map_out = st_folium(
+        m, key="drone_map", height=800,
+        use_container_width=True, returned_objects=["last_clicked"]
+    )
+
+    # 处理地图点击
+    if map_out and map_out.get("last_clicked"):
+        lat = round(map_out["last_clicked"]["lat"], 6)
+        lng = round(map_out["last_clicked"]["lng"], 6)
+        
+        if st.session_state.drawing_mode:
+            st.session_state.current_points.append([lat, lng])
+        else:
+            if not st.session_state.point_a:
+                st.session_state.point_a = (lat, lng)
+                st.session_state.transformed_points["point_a"] = None
+                st.success(f"✅ 起点A已设置（WGS84）：({lat}, {lng})")
+            elif not st.session_state.point_b:
+                st.session_state.point_b = (lat, lng)
+                st.session_state.transformed_points["point_b"] = None
+                st.success(f"✅ 终点B已设置（WGS84）：({lat}, {lng})")
+
+# ================== 飞行监控页面 ==================
+else:
+    st.title("📡 无人机飞行监控中心（含心跳包）")
+    
+    # 心跳监控启停按键
+    col_start, col_stop, col_reset = st.columns([1,1,2])
+    with col_start:
+        if st.button("▶️ 开始监控", type="primary", disabled=st.session_state.heartbeat_running):
+            st.session_state.heartbeat_running = True
+            st.success("✅ 心跳包监控已启动！")
+    with col_stop:
+        if st.button("⏹️ 结束监控", type="secondary", disabled=not st.session_state.heartbeat_running):
+            st.session_state.heartbeat_running = False
+            st.warning("⚠️ 心跳包监控已停止！")
+    with col_reset:
+        if st.button("🔄 重置心跳数据"):
+            st.session_state.drone_heartbeat["heartbeat_seq"] = 0
+            st.session_state.heartbeat_log = []
+            st.session_state.heartbeat_chart_data = {"time": [], "seq": []}
+            st.session_state.heartbeat_running = False
+            st.info("🔧 心跳数据已重置！")
+    
+    # 更新心跳数据
+    update_drone_heartbeat()
+    
+    # 心跳状态告警
+    heartbeat_status = "正常" if st.session_state.heartbeat_running else "已停止"
+    alert_color = "green" if st.session_state.heartbeat_running else "gray"
+    alert_icon = "✅" if st.session_state.heartbeat_running else "⏹️"
+    
+    if st.session_state.heartbeat_running:
+        time_since_last_heartbeat = (datetime.now() - st.session_state.drone_heartbeat["last_time"]).total_seconds()
+        if time_since_last_heartbeat > 3:
+            heartbeat_status = "心跳超时"
+            alert_color = "red"
+            alert_icon = "🔴"
+        elif st.session_state.drone_heartbeat["battery"] < 20:
+            heartbeat_status = "电量低"
+            alert_color = "orange"
+            alert_icon = "⚠️"
+        elif st.session_state.drone_heartbeat["signal_strength"] < 80:
+            heartbeat_status = "信号弱"
+            alert_color = "orange"
+            alert_icon = "⚠️"
+    
+    st.markdown(f"""
+    <div style='background-color:{alert_color}; color:white; padding:12px; border-radius:8px; text-align:center; font-size:18px; font-weight:bold; margin:10px 0;'>
+        {alert_icon} 无人机心跳状态：{heartbeat_status} | 最后心跳序号：{st.session_state.drone_heartbeat['heartbeat_seq']}
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # 实时折线图
+    st.subheader("🫀 心跳包实时曲线")
+    chart_fig = draw_heartbeat_chart()
+    st.plotly_chart(chart_fig, use_container_width=True)
+    
+    # 分栏展示数据
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.subheader("📊 心跳包核心数据")
+        card_style = """
+        <div style='background-color:#f0f2f6; padding:15px; border-radius:8px; margin-bottom:12px; border-left:4px solid {border_color};'>
+            <span style='font-size:14px; color:#666;'>{label}</span><br>
+            <span style='font-size:26px; font-weight:bold; color:{color};'>{value}</span>
+        </div>
+        """
+        
+        st.markdown(card_style.format(
+            label="当前心跳包序号",
+            color="#1E88E5",
+            border_color="#1E88E5",
+            value=st.session_state.drone_heartbeat["heartbeat_seq"]
+        ), unsafe_allow_html=True)
+        
+        signal_color = "#4CAF50" if st.session_state.drone_heartbeat["signal_strength"] >= 80 else "#FF9800" if st.session_state.drone_heartbeat["signal_strength"] >= 50 else "#F44336"
+        st.markdown(card_style.format(
+            label="信号强度",
+            color=signal_color,
+            border_color=signal_color,
+            value=f"{st.session_state.drone_heartbeat['signal_strength']}%"
+        ), unsafe_allow_html=True)
+        
+        battery_color = "#4CAF50" if st.session_state.drone_heartbeat["battery"] >= 50 else "#FF9800" if st.session_state.drone_heartbeat["battery"] >= 20 else "#F44336"
+        st.markdown(card_style.format(
+            label="剩余电量",
+            color=battery_color,
+            border_color=battery_color,
+            value=f"{st.session_state.drone_heartbeat['battery']}%"
+        ), unsafe_allow_html=True)
+        
+        flight_color = "#4CAF50" if st.session_state.drone_heartbeat["flight_status"] in ["直线飞行中", "最短绕飞中"] else "#9E9E9E"
+        st.markdown(card_style.format(
+            label="飞行状态",
+            color=flight_color,
+            border_color=flight_color,
+            value=st.session_state.drone_heartbeat["flight_status"]
+        ), unsafe_allow_html=True)
+    
+    with col2:
+        st.subheader("✅ 基础飞行状态")
+        st.success(f"无人机地面以上高度：{st.session_state.drone_height} 米")
+        st.success(f"已圈选多边形障碍物数量：{len(st.session_state.obstacles_all)} 个")
+        
+        avoid_count = sum(1 for h in st.session_state.obstacles_height if h > st.session_state.drone_height)
+        if avoid_count > 0:
+            st.error(f"🔴 发现 {avoid_count} 个障碍物高度超标，航线将沿边缘「最短路径」绕飞！")
+        else:
+            st.success(f"🟢 所有障碍物高度均达标，无人机将直线从A到B（最短路径）！")
+        
+        if len(st.session_state.obstacles_all) > 0:
+            st.subheader("🌍 障碍物详情")
+            for i in range(len(st.session_state.obstacles_all)):
+                obs_type = st.session_state.obstacles_type[i] if i < len(st.session_state.obstacles_type) else "自定义障碍物"
+                obs_h = st.session_state.obstacles_height[i] if i < len(st.session_state.obstacles_height) else 50
+                status = "🔴 最短绕飞" if obs_h > st.session_state.drone_height else "🟢 直飞"
+                st.info(f"{obs_type} {i+1}：{obs_h}米 → {status}")
+        else:
+            st.info("暂无障碍物数据！")
+        
+        st.subheader("📍 航线策略")
+        if st.session_state.point_a and st.session_state.point_b:
+            _, route_status = calculate_shortest_no_overlap_route()
+            st.write(f"当前策略：{route_status}")
+        else:
+            st.warning("请先设置起点A和终点B！")
+    
+    # 通信日志
+    st.subheader("📜 通信日志")
+    log_container = st.container(height=200)
+    with log_container:
+        if st.session_state.heartbeat_log:
+            for log in reversed(st.session_state.heartbeat_log):
+                st.text(f"[{log['time']}] 发送心跳包 序号={log['seq']}")
+        else:
+            st.text("暂无心跳日志（点击「开始监控」生成数据）")
+    
+    # 实时刷新
+    if st.session_state.heartbeat_running:
+        time.sleep(1)
+        st.rerun()
