@@ -2,7 +2,7 @@ import streamlit as st
 import folium
 from streamlit_folium import st_folium
 import json
-from shapely.geometry import Polygon, LineString, Point, LinearRing
+from shapely.geometry import Polygon, LineString, Point, MultiPoint
 from shapely.ops import nearest_points
 from shapely.affinity import scale
 import math
@@ -127,7 +127,7 @@ def load_all():
 load_all()
 st.set_page_config(page_title="无人机最短避障系统", layout="wide")
 
-# ================== 核心：左右绕飞算法 ==================
+# ================== 修复版：左右绕飞算法 ==================
 def calculate_route_with_direction():
     A = st.session_state.transformed_points["point_a"] or st.session_state.point_a
     B = st.session_state.transformed_points["point_b"] or st.session_state.point_b
@@ -143,12 +143,19 @@ def calculate_route_with_direction():
     obstacle_list = []
 
     for i, coords in enumerate(obstacles):
-        if len(coords) < 3: continue
+        if len(coords) < 3:
+            continue
         h = st.session_state.obstacles_height[i] if i < len(st.session_state.obstacles_height) else 50
-        if h <= drone_h: continue
-        poly = Polygon(coords)
-        scaled = scale(poly, xfact=1.0 + safety_r/1600., yfact=1.0 + safety_r/1600., origin='centroid')
-        obstacle_list.append({"poly": scaled, "center": poly.centroid})
+        if h <= drone_h:
+            continue
+        try:
+            poly = Polygon(coords)
+            if not poly.is_valid:
+                continue
+            scaled = scale(poly, xfact=1.0 + safety_r/1600., yfact=1.0 + safety_r/1600., origin='centroid')
+            obstacle_list.append({"poly": scaled, "center": poly.centroid})
+        except:
+            continue
 
     if not obstacle_list:
         return [A, B], f"🟢 高度足够，直线飞行 | 安全半径：{safety_r}米"
@@ -161,9 +168,11 @@ def calculate_route_with_direction():
         if not line.intersects(obs["poly"]):
             continue
 
-        cx, cy = obs["center"].x, obs["center"].y
-        px, py = line.intersection(obs["poly"].boundary).coords[0]
+        # 修复：使用 nearest_points 替代直接取交点，彻底解决报错
+        p1, p2 = nearest_points(line, obs["poly"].boundary)
+        px, py = p1.x, p1.y
 
+        cx, cy = obs["center"].x, obs["center"].y
         dx = px - cx
         dy = py - cy
         dist = math.hypot(dx, dy) or 1
@@ -189,7 +198,8 @@ def calculate_route_with_direction():
 
 # ================== 心跳 ==================
 def update_heartbeat():
-    if not st.session_state.heartbeat_running: return
+    if not st.session_state.heartbeat_running:
+        return
     now = datetime.now()
     if (now - st.session_state.drone_heartbeat["last_time"]).total_seconds() < 1:
         return
@@ -223,7 +233,8 @@ with st.sidebar:
         )
         if st.button("✅ 转换坐标"):
             def conv(p):
-                if not p: return None
+                if not p:
+                    return None
                 lat, lng = p
                 if st.session_state.coord_system == "GCJ02（火星坐标系）":
                     nlng, nlat = wgs84_to_gcj02(lng, lat)
@@ -249,7 +260,7 @@ with st.sidebar:
     st.subheader("🛡️ 安全半径")
     st.session_state.drone_safety_radius = st.slider("安全距离（米）",1,50,15)
 
-    # ===================== 【新增】左右绕飞按钮 =====================
+    # 左右绕飞按钮
     st.markdown("---")
     st.subheader("↔️ 绕飞方向")
     c1,c2 = st.columns(2)
@@ -272,8 +283,9 @@ with st.sidebar:
             st.session_state.current_points.append(st.session_state.current_points[0])
             st.session_state.obstacles_all.append(st.session_state.current_points)
             st.session_state.obstacles_type.append(st.session_state.drawing_mode)
-            st.session_state.obstacles_height.append(REAL_WORLD_HEIGHTS[st.session_state.drawing_mode])
+            st.session_state.obstacles_height.append(REAL_WORLD_HEIGHTS[dtype])
             save_all()
+            st.success("已添加障碍物")
     if st.button("🗑️ 清空障碍物"):
         st.session_state.obstacles_all=[]
         st.session_state.obstacles_type=[]
@@ -282,12 +294,15 @@ with st.sidebar:
 
     st.markdown("---")
     st.subheader("📍 A / B 点")
-    if st.button("🟢 设置A点"):
-        st.session_state.point_a = None
-        st.session_state.transformed_points["point_a"]=None
-    if st.button("🔴 设置B点"):
-        st.session_state.point_b = None
-        st.session_state.transformed_points["point_b"]=None
+    colA, colB = st.columns(2)
+    with colA:
+        if st.button("清除A点"):
+            st.session_state.point_a = None
+            st.session_state.transformed_points["point_a"] = None
+    with colB:
+        if st.button("清除B点"):
+            st.session_state.point_b = None
+            st.session_state.transformed_points["point_b"] = None
 
 # ================== 地图页面 ==================
 if page == "航线规划":
@@ -301,9 +316,9 @@ if page == "航线规划":
     A = st.session_state.transformed_points["point_a"] or st.session_state.point_a
     B = st.session_state.transformed_points["point_b"] or st.session_state.point_b
     if A:
-        folium.CircleMarker(A, radius=12, color='green', fill=True).add_to(m)
+        folium.CircleMarker(A, radius=12, color='green', fill=True, popup="起点A").add_to(m)
     if B:
-        folium.CircleMarker(B, radius=12, color='red', fill=True).add_to(m)
+        folium.CircleMarker(B, radius=12, color='red', fill=True, popup="终点B").add_to(m)
 
     obstacles = st.session_state.transformed_points["obstacles"] or st.session_state.obstacles_all
     for o in obstacles:
@@ -325,10 +340,10 @@ if page == "航线规划":
         else:
             if not st.session_state.point_a:
                 st.session_state.point_a = (lat,lng)
-                st.success("A点已设")
+                st.success("✅ A点已设置")
             elif not st.session_state.point_b:
                 st.session_state.point_b = (lat,lng)
-                st.success("B点已设")
+                st.success("✅ B点已设置")
 
 # ================== 监控页面 ==================
 else:
