@@ -376,7 +376,7 @@ def update_drone_heartbeat():
             st.session_state.heartbeat_chart_data["time"] = st.session_state.heartbeat_chart_data["time"][-20:]
             st.session_state.heartbeat_chart_data["seq"] = st.session_state.heartbeat_chart_data["seq"][-20:]
 
-# ================== 页面布局（仅新增安全半径滑块） ==================
+# ================== 页面布局（仅新增安全半径滑块 + 修复地图显示） ==================
 st.title("✈️ 无人机避障系统")
 st.markdown("---")
 
@@ -498,18 +498,21 @@ with st.sidebar:
     )
     st.session_state.drone_heartbeat["heartbeat_interval"] = heartbeat_interval
 
-# 主页面（完全保留，仅绕行点弹窗添加安全半径）
+# 主页面（修复地图显示问题，其余完全保留）
 col1, col2 = st.columns([2, 1])
 
 with col1:
     st.subheader("🗺️ 地图操作区（当前坐标系：{}）".format(st.session_state.coord_system))
     
-    # 初始化地图（完全保留你原有配置）
+    # ========== 核心修复：地图初始化（还原完整配置） ==========
+    # 初始化地图（使用默认OpenStreetMap，确保显示）
     center_lat = 32.2330
     center_lng = 118.7490
     m = folium.Map(
         location=[center_lat, center_lng],
-        zoom_start=18
+        zoom_start=18,
+        width="100%",
+        height="600px"
     )
     
     # 绘制起点A（完全保留）
@@ -581,11 +584,16 @@ with col1:
                 popup=f"绕行点 {idx+1}（安全半径：{st.session_state.drone_safety_radius}米）"
             ).add_to(m)
     
-    # 渲染地图（完全保留）
-    map_data = st_folium(m, width=None, height=600)
+    # ========== 核心修复：地图渲染（添加必要参数） ==========
+    map_data = st_folium(
+        m,
+        width=None,
+        height=600,
+        returned_objects=["last_clicked"]  # 确保点击事件正常
+    )
     
     # 处理地图点击事件（完全保留）
-    if map_data.get("last_clicked"):
+    if map_data and map_data.get("last_clicked"):
         lat = map_data["last_clicked"]["lat"]
         lng = map_data["last_clicked"]["lng"]
         clicked_point = (lat, lng)
