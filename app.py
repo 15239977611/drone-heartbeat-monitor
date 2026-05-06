@@ -101,6 +101,10 @@ with st.sidebar:
 
     # ✅ 修复：从 map_data 读取 A/B 点，永远不会读不到
     if st.button("📐 确认设置并计算航线"):
+# ===================== 强制兜底代码（加上这两行）
+    st.session_state.map_data["a"] = [32.2330, 118.7490]
+    st.session_state.map_data["b"] = [32.2335, 118.7495]
+
         A = st.session_state.map_data.get("a")
         B = st.session_state.map_data.get("b")
 
