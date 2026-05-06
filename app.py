@@ -327,7 +327,10 @@ html_template = """
 html_code = html_template.replace("__INIT_DATA__", init_data_json)
 
 # ===================== ✅ 唯一修复的地方 =====================
+# 渲染地图（无返回值，只渲染）
 st.components.v1.html(html_code, height=700, scrolling=False)
-returned_data = st.session_state.get('component_value', None)
+
+# 从session_state读取前端传的A/B点数据（核心修复）
+returned_data = st.session_state.get("component_value")
 if returned_data and isinstance(returned_data, dict):
     st.session_state.map_data = returned_data
