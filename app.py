@@ -100,32 +100,31 @@ with st.sidebar:
     st.markdown("---")
 
     if st.button("📐 确认设置并计算航线"):
-        A = None
-        B = None
-        if st.session_state.map_data.get("a"):
-            A = tuple(st.session_state.map_data["a"])
-        if st.session_state.map_data.get("b"):
-            B = tuple(st.session_state.map_data["b"])
-        obs = st.session_state.map_data.get("obstacles", [])
+    # ✅ 终极兜底：直接从地图初始化数据里拿A/B点（不管前端传没传）
+    A = st.session_state.map_data.get("a")
+    B = st.session_state.map_data.get("b")
+    
+    # 手动转成tuple，兼容算法要求
+    if A: A = tuple(A)
+    if B: B = tuple(B)
 
-        if A and B:
-            st.session_state.point_a = A
-            st.session_state.point_b = B
-            st.session_state.obstacles_all = obs
-            st.session_state.obstacles_height = [obs_height] * len(obs) if obs else []
-            route = calculate_route(
-                A, B,
-                st.session_state.obstacles_all,
-                st.session_state.obstacles_height,
-                st.session_state.drone_height,
-                st.session_state.drone_safety_radius,
-                st.session_state.avoid_direction
-            )
-            st.session_state.route = route
-            st.success("✅ 航线计算完成！")
-        else:
-            st.warning("请先在地图上设置起点 A 和终点 B")
-
+    if A and B:
+        # 强制赋值到session_state
+        st.session_state.point_a = A
+        st.session_state.point_b = B
+        # 计算航线
+        route = calculate_route(
+            A, B,
+            st.session_state.obstacles_all,
+            st.session_state.obstacles_height,
+            st.session_state.drone_height,
+            st.session_state.drone_safety_radius,
+            st.session_state.avoid_direction
+        )
+        st.session_state.route = route
+        st.success("✅ 航线计算完成！")
+    else:
+        st.warning("请先在地图上设置起点 A 和终点 B")
 # ================== 传给 HTML 的数据 ==================
 init_data = {
     "a": st.session_state.map_data.get("a"),
@@ -330,7 +329,15 @@ html_code = html_template.replace("__INIT_DATA__", init_data_json)
 # 渲染地图（无返回值，只渲染）
 st.components.v1.html(html_code, height=700, scrolling=False)
 
-# 从session_state读取前端传的A/B点数据（核心修复）
-returned_data = st.session_state.get("component_value")
+returned_data = st.session_state.get("component_value", None)
 if returned_data and isinstance(returned_data, dict):
     st.session_state.map_data = returned_data
+
+    # 自动同步 A B 障碍物
+    if returned_data.get("a"):
+        st.session_state.point_a = tuple(returned_data["a"])
+    if returned_data.get("b"):
+        st.session_state.point_b = tuple(returned_data["b"])
+    if returned_data.get("obstacles") is not None:
+        st.session_state.obstacles_all = returned_data["obstacles"]
+        st.session_state.obstacles_height = [obs_height] * len(returned_data["obstacles"])
