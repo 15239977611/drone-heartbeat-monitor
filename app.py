@@ -1,182 +1,213 @@
 import streamlit as st
-import leafmap.foliumap as leafmap
+import folium
+from streamlit_folium import st_folium
 import json
-import math
-import time
-from datetime import datetime
 from shapely.geometry import Polygon, LineString, Point
 from shapely.ops import nearest_points
 from shapely.affinity import scale
+import math
+import time
 
-# ================== 坐标系转换 ==================
-PI = math.pi
-a = 6378245.0
-ee = 0.00669342162296594323
+# ===================== 初始化 =====================
+if "point_a" not in st.session_state:
+    st.session_state.point_a = None
+if "point_b" not in st.session_state:
+    st.session_state.point_b = None
+if "obstacles_all" not in st.session_state:
+    st.session_state.obstacles_all = []
+if "obstacles_height" not in st.session_state:
+    st.session_state.obstacles_height = []
+if "drone_height" not in st.session_state:
+    st.session_state.drone_height = 8
+if "drone_safety_radius" not in st.session_state:
+    st.session_state.drone_safety_radius = 15
+if "avoid_direction" not in st.session_state:
+    st.session_state.avoid_direction = "左"
 
-def transform_lat(x, y):
-    ret = -100.0 + 2.0 * x + 3.0 * y + 0.2 * y * y + 0.1 * x * y + 0.2 * math.sqrt(abs(x))
-    ret += (20.0 * math.sin(6.0 * x * PI) + 20.0 * math.sin(2.0 * x * PI)) * 2.0 / 3.0
-    return ret
+# 飞行状态（无闪烁核心）
+if "flight_path" not in st.session_state:
+    st.session_state.flight_path = []
+if "drone_pos" not in st.session_state:
+    st.session_state.drone_pos = None
+if "flight_idx" not in st.session_state:
+    st.session_state.flight_idx = 0
 
-def transform_lng(x, y):
-    ret = 300.0 + x + 2.0 * y + 0.1 * x * x + 0.1 * x * y + 0.1 * math.sqrt(abs(x))
-    return ret
+GROUND_HEIGHT = 0
+REAL_WORLD_HEIGHTS = {
+    "自定义障碍物": 50, "普通房屋": 20, "高层楼房": 80,
+    "大树/电线杆": 10, "操场/空地": 0, "桥梁/高架": 15, "塔楼/信号塔": 60
+}
 
-def out_of_china(lat, lng):
-    return not (lng > 73.66 and lng < 135.05 and lat > 3.86 and lat < 53.55)
-
-def wgs84_to_gcj02(lng, lat):
-    if out_of_china(lat, lng): return [lng, lat]
-    dlat = transform_lat(lng-105, lat-35)
-    dlng = transform_lng(lng-105, lat-35)
-    rad = lat / 180 * PI
-    magic = math.sin(rad)
-    return [lng+dlng, lat+dlat]
-
-def gcj02_to_wgs84(lng, lat):
-    if out_of_china(lat, lng): return [lng, lat]
-    dlat = transform_lat(lng-105, lat-35)
-    dlng = transform_lng(lng-105, lat-35)
-    return [lng*2-(lng+dlng), lat*2-(lat+dlat)]
-
-# ================== 初始化 ==================
-st.set_page_config(layout="wide")
-for k in ["point_a","point_b","obstacles_all","obstacles_type","obstacles_height",
-           "drone_height","drone_safety_radius","avoid_direction","flight_path",
-           "drone_pos","is_flying","drawing_mode","current_points"]:
-    if k not in st.session_state:
-        st.session_state[k] = None if k in ["point_a","point_b","drone_pos"] else [] if k=="obstacles_all" else 8 if k=="drone_height" else 15 if k=="drone_safety_radius" else "自动" if k=="avoid_direction" else False if k=="is_flying" else None if k=="drawing_mode" else []
-
-REAL_WORLD_HEIGHTS = {"自定义障碍物":50,"普通房屋":20,"高层楼房":80,"大树/电线杆":10,"操场/空地":0,"桥梁/高架":15,"塔楼/信号塔":60}
-
-# ================== 平滑轨迹 ==================
-def interpolate_path(path, steps=50):
-    out = []
+# ===================== 平滑轨迹 =====================
+def interpolate_path(path, steps=40):
+    smooth = []
     for i in range(len(path)-1):
-        lat1,lng1 = path[i]
-        lat2,lng2 = path[i+1]
+        lat1, lng1 = path[i]
+        lat2, lng2 = path[i+1]
         for s in range(steps):
-            f = s/steps
-            out.append((lat1+(lat2-lat1)*f, lng1+(lng2-lng1)*f))
-    return out
+            f = s / steps
+            lat = lat1 + (lat2 - lat1) * f
+            lng = lng1 + (lng2 - lng1) * f
+            smooth.append((lat, lng))
+    return smooth
 
-# ================== 航线算法 ==================
-def calc_route():
+# ===================== 绕飞算法 =====================
+def calculate_route():
     A = st.session_state.point_a
     B = st.session_state.point_b
-    if not A or not B: return []
-    h = st.session_state.drone_height
-    r = st.session_state.drone_safety_radius
-    dir = st.session_state.avoid_direction
+    if not A or not B:
+        return []
+
+    drone_h = st.session_state.drone_height
+    safety_r = st.session_state.drone_safety_radius
+    direction = st.session_state.avoid_direction
+    OFFSET = safety_r / 12000.0
     route = [A]
-    for coords in st.session_state.obstacles_all:
-        if len(coords)<3: continue
-        idx = st.session_state.obstacles_all.index(coords)
-        oh = st.session_state.obstacles_height[idx] if idx<len(st.session_state.obstacles_height) else 50
-        if oh <= h: continue
+
+    for i, coords in enumerate(st.session_state.obstacles_all):
+        if len(coords) < 3:
+            continue
+        obs_h = st.session_state.obstacles_height[i] if i < len(st.session_state.obstacles_height) else 50
+        if obs_h <= drone_h:
+            continue
+
         try:
-            p = Polygon(coords)
-            s = scale(p, xfact=1+r/1600, yfact=1+r/1600, origin='centroid')
-            cx,cy = p.centroid.x, p.centroid.y
+            poly = Polygon(coords)
+            safe_poly = scale(poly, 1 + safety_r/1600, 1 + safety_r/1600, origin='centroid')
+            cx, cy = poly.centroid.x, poly.centroid.y
             line = LineString([route[-1], B])
-            if not line.intersects(s): continue
-            px,py = nearest_points(line, s.boundary)[0].coords[0]
-            dx,dy = px-cx, py-cy
-            d = math.hypot(dx,dy) or 1
-            dx/=d; dy/=d
-            if dir=="左": ox,oy = -dy, dx
-            elif dir=="右": ox,oy = dy, -dx
-            else: ox,oy=dx,dy
-            route.append((px+ox*r/12000, py+oy*r/12000))
-        except: continue
+            if not line.intersects(safe_poly):
+                continue
+
+            p, _ = nearest_points(line, safe_poly.boundary)
+            px, py = p.x, p.y
+
+            dx = px - cx
+            dy = py - cy
+            dist = math.hypot(dx, dy) or 1
+            dx /= dist
+            dy /= dist
+
+            if direction == "左":
+                wx, wy = -dy, dx
+            else:
+                wx, wy = dy, -dx
+
+            route.append((px + wx * OFFSET, py + wy * OFFSET))
+        except:
+            continue
+
     route.append(B)
     return route
 
-# ================== 地图 ==================
+# ===================== 界面 =====================
+st.set_page_config(layout="wide")
+st.title("✈️ 无人机避障飞行系统（稳定无闪烁版）")
+
 with st.sidebar:
-    st.title("✈️ 无人机避障")
-    page = st.radio("页面", ["航线规划", "飞行监控"])
-    
-    st.subheader("🛸 高度")
-    st.session_state.drone_height = st.slider("米",0,200,8)
-    
+    st.subheader("🛸 无人机高度")
+    st.session_state.drone_height = st.slider("飞行高度（米）", 0, 200, 8)
+
     st.subheader("🛡️ 安全半径")
-    st.session_state.drone_safety_radius = st.slider("米",1,50,15)
-    
+    st.session_state.drone_safety_radius = st.slider("安全距离（米）", 1, 50, 15)
+
     st.subheader("↔️ 绕飞方向")
-    c1,c2 = st.columns(2)
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("⬅️ 向左绕飞"):
+            st.session_state.avoid_direction = "左"
+    with col2:
+        if st.button("➡️ 向右绕飞"):
+            st.session_state.avoid_direction = "右"
+    st.info(f"当前绕飞：{st.session_state.avoid_direction}")
+
+    st.subheader("✈️ 飞行控制")
+    c1, c2 = st.columns(2)
     with c1:
-        if st.button("⬅️ 向左"): st.session_state.avoid_direction="左"
-    with c2:
-        if st.button("➡️ 向右"): st.session_state.avoid_direction="右"
-    st.info(f"当前：{st.session_state.avoid_direction}")
-    
-    st.subheader("✈️ 飞行")
-    c1,c2 = st.columns(2)
-    with c1:
-        if st.button("▶️ 起飞"):
-            route = calc_route()
-            if len(route)>=2:
+        if st.button("▶️ 开始飞行"):
+            route = calculate_route()
+            if len(route) >= 2:
                 st.session_state.flight_path = interpolate_path(route)
-                st.session_state.is_flying = True
                 st.session_state.drone_pos = st.session_state.flight_path[0]
+                st.session_state.flight_idx = 0
     with c2:
-        if st.button("⏹️ 停止"):
-            st.session_state.is_flying=False
-    
+        if st.button("⏹️ 停止飞行"):
+            st.session_state.drone_pos = None
+
     st.subheader("🌍 障碍物")
-    t = st.selectbox("类型", ["无"]+list(REAL_WORLD_HEIGHTS.keys()))
-    if st.button("🟢 开始圈选"):
-        st.session_state.drawing_mode = t
-        st.session_state.current_points=[]
-    if st.button("✅ 完成圈选") and st.session_state.drawing_mode and len(st.session_state.current_points)>=3:
-        st.session_state.current_points.append(st.session_state.current_points[0])
-        st.session_state.obstacles_all.append(st.session_state.current_points)
-        st.session_state.obstacles_type.append(st.session_state.drawing_mode)
-        st.session_state.obstacles_height.append(REAL_WORLD_HEIGHTS[t])
-    if st.button("🗑️ 清空"):
-        st.session_state.obstacles_all=[]
-    
-    st.subheader("📍 A / B")
-    if st.button("🟢 设置A点"): st.session_state.point_a=None
-    if st.button("🔴 设置B点"): st.session_state.point_b=None
+    obs_type = st.selectbox("障碍物类型", list(REAL_WORLD_HEIGHTS.keys()))
+    if st.button("🟢 开始圈选障碍物"):
+        st.session_state["drawing"] = True
+        st.session_state["temp_points"] = []
+    if st.button("✅ 完成圈选"):
+        if len(st.session_state.get("temp_points", [])) >= 3:
+            pts = st.session_state.temp_points
+            pts.append(pts[0])
+            st.session_state.obstacles_all.append(pts)
+            st.session_state.obstacles_height.append(REAL_WORLD_HEIGHTS[obs_type])
+    if st.button("🗑️ 清空所有障碍物"):
+        st.session_state.obstacles_all = []
+        st.session_state.obstacles_height = []
 
-if page == "航线规划":
-    m = leafmap.Map(location=[32.2330, 118.7490], zoom=18, tiles="ESRI Satellite")
-    route = calc_route()
+    st.subheader("📍 标记点位")
+    if st.button("🟢 设置起点 A"):
+        st.session_state.point_a = None
+    if st.button("🔴 设置终点 B"):
+        st.session_state.point_b = None
 
-    if st.session_state.point_a:
-        m.add_marker([st.session_state.point_a[0], st.session_state.point_a[1]], icon="home", color="blue")
-    if st.session_state.point_b:
-        m.add_marker([st.session_state.point_b[0], st.session_state.point_b[1]], icon="flag", color="red")
-    
-    for o in st.session_state.obstacles_all:
-        if len(o)>2:
-            m.add_polygon(o, color="orange", fill_color="orange", fill_opacity=0.4)
-    
-    if len(route)>=2:
-        m.add_polyline(route, color="blue", weight=5)
+# ===================== 地图绘制（稳定不闪） =====================
+route = calculate_route()
+center_loc = st.session_state.point_a if st.session_state.point_a else [32.2330, 118.7490]
+m = folium.Map(location=center_loc, zoom_start=18, tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", attr="ESRI")
 
-    # ✅ 核心：永不闪烁！
-    if st.session_state.drone_pos:
-        lat,lng = st.session_state.drone_pos
-        m.add_marker([lat,lng], icon="plane", color="blue", rotation=0)
+# 绘制 A B
+if st.session_state.point_a:
+    folium.CircleMarker(st.session_state.point_a, radius=10, color="green", fill=True).add_to(m)
+if st.session_state.point_b:
+    folium.CircleMarker(st.session_state.point_b, radius=10, color="red", fill=True).add_to(m)
 
-    m.to_streamlit(height=700)
+# 绘制障碍物
+for obs in st.session_state.obstacles_all:
+    if len(obs) > 2:
+        folium.Polygon(obs, color="orange", fill=True, fill_opacity=0.4).add_to(m)
 
-    # ✅ 无刷新动画
-    if st.session_state.is_flying and st.session_state.flight_path:
-        i = st.session_state.get("flight_i",0)
-        if i < len(st.session_state.flight_path):
-            st.session_state.drone_pos = st.session_state.flight_path[i]
-            st.session_state.flight_i = i+1
-            time.sleep(0.05)
-            st.rerun()
-        else:
-            st.session_state.is_flying=False
-            st.success("到达目的地！")
+# 绘制航线
+if len(route) >= 2:
+    folium.PolyLine(route, color="blue", weight=5, opacity=0.9).add_to(m)
 
-else:
-    st.title("📡 飞行监控")
-    st.write("飞行中：", st.session_state.is_flying)
-    st.write("无人机位置：", st.session_state.drone_pos)
+# 绘制无人机
+if st.session_state.drone_pos:
+    lat, lng = st.session_state.drone_pos
+    folium.Marker(
+        location=(lat, lng),
+        icon=folium.DivIcon(html='<div style="font-size:28px; color:blue;">✈️</div>')
+    ).add_to(m)
+
+# 固定地图容器 → 彻底解决闪烁
+map_container = st.empty()
+with map_container:
+    map_output = st_folium(m, height=700, key="static_map", returned_objects=["last_clicked"])
+
+# ===================== 点击设置 A B / 圈选障碍物 =====================
+if map_output and map_output.get("last_clicked"):
+    lat = map_output["last_clicked"]["lat"]
+    lng = map_output["last_clicked"]["lng"]
+
+    if st.session_state.get("drawing", False):
+        st.session_state.temp_points.append([lat, lng])
+    else:
+        if st.session_state.point_a is None:
+            st.session_state.point_a = (lat, lng)
+        elif st.session_state.point_b is None:
+            st.session_state.point_b = (lat, lng)
+
+# ===================== 飞行循环（超级平滑、不闪烁） =====================
+if st.session_state.drone_pos and st.session_state.flight_path:
+    total = len(st.session_state.flight_path)
+    if st.session_state.flight_idx < total - 1:
+        st.session_state.flight_idx += 1
+        st.session_state.drone_pos = st.session_state.flight_path[st.session_state.flight_idx]
+        time.sleep(0.04)
+        st.rerun()
+    else:
+        st.success("✅ 无人机已到达目的地！")
