@@ -389,15 +389,13 @@ html_code = f"""
 </html>
 """
 
-# ===================== 回调函数 =====================
-def update_map_data(new_value):
-    if new_value is not None:
-        st.session_state.map_data = new_value
-
-# ===================== 只渲染一次地图组件（无 key 参数） =====================
-st.components.v1.html(
+# ===================== 渲染地图组件并接收返回值 =====================
+returned_data = st.components.v1.html(
     html_code,
     height=700,
-    scrolling=False,
-    on_change=update_map_data
+    scrolling=False
 )
+
+# 如果 JS 发送了新数据，更新 map_data
+if returned_data is not None:
+    st.session_state.map_data = returned_data
