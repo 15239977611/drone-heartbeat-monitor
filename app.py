@@ -1,13 +1,13 @@
 import streamlit as st
 import json
+import math
 from shapely.geometry import Polygon, LineString
 from shapely.ops import nearest_points
 from shapely.affinity import scale
-import math
 
-# ===================== 初始化 =====================
-if "map_data" not in st.session_state or not isinstance(st.session_state.map_data, dict):
-    st.session_state.map_data = {"a": None, "b": None, "obstacles": []}
+# ================== 初始化 ==================
+if "point_a" not in st.session_state:
+    st.session_state.point_a = None
 if "point_b" not in st.session_state:
     st.session_state.point_b = None
 if "obstacles_all" not in st.session_state:
@@ -22,7 +22,7 @@ if "avoid_direction" not in st.session_state:
     st.session_state.avoid_direction = "左"
 if "route" not in st.session_state:
     st.session_state.route = []
-if "map_data" not in st.session_state:
+if "map_data" not in st.session_state or not isinstance(st.session_state.map_data, dict):
     st.session_state.map_data = {"a": None, "b": None, "obstacles": []}
 
 REAL_WORLD_HEIGHTS = {
@@ -30,11 +30,10 @@ REAL_WORLD_HEIGHTS = {
     "大树/电线杆": 10, "操场/空地": 0, "桥梁/高架": 15, "塔楼/信号塔": 60
 }
 
-# ===================== 绕飞算法 =====================
+# ================== 绕飞算法 ==================
 def calculate_route(A, B, obstacles_all, heights, drone_h, safety_r, direction):
     OFFSET = safety_r / 111000.0
     route = [A]
-
     for i, coords in enumerate(obstacles_all):
         if len(coords) < 3:
             continue
@@ -43,7 +42,7 @@ def calculate_route(A, B, obstacles_all, heights, drone_h, safety_r, direction):
             continue
         try:
             poly = Polygon(coords)
-            safe_poly = scale(poly, 1 + safety_r/1600, 1 + safety_r/1600, origin='centroid')
+            safe_poly = scale(poly, 1 + safety_r / 1600, 1 + safety_r / 1600, origin='centroid')
             cx, cy = poly.centroid.x, poly.centroid.y
             line = LineString([route[-1], B])
             if not line.intersects(safe_poly):
@@ -52,7 +51,7 @@ def calculate_route(A, B, obstacles_all, heights, drone_h, safety_r, direction):
             px, py = p.x, p.y
             dx, dy = px - cx, py - cy
             dist = math.hypot(dx, dy) or 1
-            dx, dy = dx/dist, dy/dist
+            dx, dy = dx / dist, dy / dist
             if direction == "左":
                 wx, wy = -dy, dx
             else:
@@ -63,20 +62,7 @@ def calculate_route(A, B, obstacles_all, heights, drone_h, safety_r, direction):
     route.append(B)
     return route
 
-def interpolate_path(path, steps=15):
-    smooth = []
-    for i in range(len(path)-1):
-        lat1, lng1 = path[i]
-        lat2, lng2 = path[i+1]
-        for s in range(steps):
-            f = s / steps
-            lat = lat1 + (lat2 - lat1) * f
-            lng = lng1 + (lng2 - lng1) * f
-            smooth.append([lat, lng])
-    smooth.append([path[-1][0], path[-1][1]])
-    return smooth
-
-# ===================== 界面 =====================
+# ================== 界面 ==================
 st.set_page_config(layout="wide")
 st.title("✈️ 无人机避障飞行系统（零闪烁版）")
 
@@ -85,7 +71,7 @@ with st.sidebar:
     st.session_state.drone_height = st.slider("飞行高度（米）", 0, 200, st.session_state.drone_height)
     st.session_state.drone_safety_radius = st.slider("安全半径（米）", 1, 50, st.session_state.drone_safety_radius)
     st.session_state.avoid_direction = st.radio("绕飞方向", ["左", "右"],
-                                                index=0 if st.session_state.avoid_direction=="左" else 1)
+                                                index=0 if st.session_state.avoid_direction == "左" else 1)
     st.info(f"当前绕飞：{st.session_state.avoid_direction}")
 
     st.subheader("🌍 障碍物类型")
@@ -129,7 +115,7 @@ with st.sidebar:
         else:
             st.warning("请先在地图上设置起点 A 和终点 B")
 
-# ===================== 构造传给 HTML 的数据 =====================
+# ================== 准备 JS 数据 ==================
 init_data = {
     "a": st.session_state.map_data.get("a"),
     "b": st.session_state.map_data.get("b"),
@@ -141,8 +127,9 @@ init_data = {
 }
 init_data_json = json.dumps(init_data)
 
-# ===================== 内嵌 HTML / JS 地图 =====================
-html_code = f"""
+# ================== HTML / JS 地图 ==================
+# 用模板替换，避免 f-string 花括号地狱
+html_template = """
 <!DOCTYPE html>
 <html>
 <head>
@@ -151,27 +138,19 @@ html_code = f"""
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <style>
-        html, body {{
-            height: 100%;
-            margin: 0;
-            padding: 0;
-        }}
-        #map {{
-            height: 100%;
-            width: 100%;
-        }}
-        .btn-container {{
-            position: absolute;
-            top: 10px; left: 10px; z-index: 1000;
+        html, body { height: 100%; margin: 0; padding: 0; }
+        #map { height: 100%; width: 100%; }
+        .btn-container {
+            position: absolute; top: 10px; left: 10px; z-index: 1000;
             display: flex; gap: 5px; flex-wrap: wrap;
-        }}
-        .btn-container button {{
+        }
+        .btn-container button {
             background: white; border: 1px solid #ccc; border-radius: 4px;
             padding: 6px 12px; cursor: pointer; font-size: 14px;
-        }}
-        .btn-container button.active {{
+        }
+        .btn-container button.active {
             background: #4CAF50; color: white; border-color: #4CAF50;
-        }}
+        }
     </style>
 </head>
 <body>
@@ -185,15 +164,14 @@ html_code = f"""
         <button id="btn-fly">▶️ 开始飞行</button>
         <button id="btn-stop">⏹️ 停止飞行</button>
     </div>
-
     <script>
-        // 初始化地图
+        // ---------- 初始化地图 ----------
         var map = L.map('map').setView([32.2330, 118.7490], 18);
-        L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
             attribution: '© OpenStreetMap contributors'
-        }}).addTo(map);
+        }).addTo(map);
 
-        // 数据状态
+        // ---------- 全局变量 ----------
         var pointA = null;
         var pointB = null;
         var tempObsPoints = [];
@@ -202,72 +180,58 @@ html_code = f"""
         var markersB = [];
         var drawMode = false;
         var drawLayer = null;
-
-        // 飞行相关
         var droneMarker = null;
         var routePath = null;
         var flightTimer = null;
         var flightPath = [];
         var currentIndex = 0;
 
-        // 接收 Python 传来的数据
-        var initData = {init_data_json};
+        // 接收 Python 传来的初始数据
+        var initData = __INIT_DATA__;
 
         // 初始化已有数据
-        if (initData.a) {{
-            pointA = initData.a;
-            addMarkerA(pointA[0], pointA[1]);
-        }}
-        if (initData.b) {{
-            pointB = initData.b;
-            addMarkerB(pointB[0], pointB[1]);
-        }}
-        if (initData.obstacles && initData.obstacles.length) {{
-            obstacles = initData.obstacles;
-            drawAllObstacles();
-        }}
-        if (initData.route && initData.route.length >= 2) {{
-            drawRoute(initData.route);
-            flightPath = interpolatePath(initData.route);
-        }}
+        if (initData.a) { pointA = initData.a; addMarkerA(pointA[0], pointA[1]); }
+        if (initData.b) { pointB = initData.b; addMarkerB(pointB[0], pointB[1]); }
+        if (initData.obstacles && initData.obstacles.length) { obstacles = initData.obstacles; drawAllObstacles(); }
+        if (initData.route && initData.route.length >= 2) { drawRoute(initData.route); flightPath = interpolatePath(initData.route); }
 
-        // ----- 地图事件 -----
-        map.on('click', function(e) {{
-            if (drawMode) {{
+        // 地图点击（绘制障碍物模式）
+        map.on('click', function(e) {
+            if (drawMode) {
                 tempObsPoints.push([e.latlng.lat, e.latlng.lng]);
                 updateObsPreview();
-            }}
-        }});
+            }
+        });
 
-        // ----- 按钮绑定 -----
-        document.getElementById('btn-set-a').addEventListener('click', function() {{
+        // ---------- 按钮事件 ----------
+        document.getElementById('btn-set-a').addEventListener('click', function() {
             if (drawMode) return alert('请先完成障碍物绘制');
-            map.once('click', function(e) {{
+            map.once('click', function(e) {
                 pointA = [e.latlng.lat, e.latlng.lng];
                 addMarkerA(pointA[0], pointA[1]);
                 sendDataToPython();
-            }});
-        }});
+            });
+        });
 
-        document.getElementById('btn-set-b').addEventListener('click', function() {{
+        document.getElementById('btn-set-b').addEventListener('click', function() {
             if (drawMode) return alert('请先完成障碍物绘制');
-            map.once('click', function(e) {{
+            map.once('click', function(e) {
                 pointB = [e.latlng.lat, e.latlng.lng];
                 addMarkerB(pointB[0], pointB[1]);
                 sendDataToPython();
-            }});
-        }});
+            });
+        });
 
-        document.getElementById('btn-draw-obs').addEventListener('click', function() {{
+        document.getElementById('btn-draw-obs').addEventListener('click', function() {
             drawMode = true;
             tempObsPoints = [];
             if (drawLayer) map.removeLayer(drawLayer);
-            drawLayer = L.polyline([], {{color: 'red', dashArray: '5, 5'}}).addTo(map);
-            document.getElementById('btn-draw-obs').classList.add('active');
+            drawLayer = L.polyline([], {color: 'red', dashArray: '5, 5'}).addTo(map);
+            this.classList.add('active');
             alert('现在点击地图添加障碍物顶点，完成后按「完成障碍物」');
-        }});
+        });
 
-        document.getElementById('btn-finish-obs').addEventListener('click', function() {{
+        document.getElementById('btn-finish-obs').addEventListener('click', function() {
             if (!drawMode) return alert('请先点击「绘制障碍物」');
             if (tempObsPoints.length < 3) return alert('至少需要3个点');
             obstacles.push(tempObsPoints.slice());
@@ -277,125 +241,117 @@ html_code = f"""
             if (drawLayer) map.removeLayer(drawLayer);
             document.getElementById('btn-draw-obs').classList.remove('active');
             sendDataToPython();
-        }});
+        });
 
-        document.getElementById('btn-clear-obs').addEventListener('click', function() {{
+        document.getElementById('btn-clear-obs').addEventListener('click', function() {
             obstacles = [];
             drawAllObstacles();
             sendDataToPython();
-        }});
+        });
 
-        document.getElementById('btn-fly').addEventListener('click', function() {{
+        document.getElementById('btn-fly').addEventListener('click', function() {
             if (!flightPath.length) return alert('请先确认设置并计算航线（点击侧边栏按钮）');
             startFlight();
-        }});
+        });
 
-        document.getElementById('btn-stop').addEventListener('click', function() {{
-            stopFlight();
-        }});
+        document.getElementById('btn-stop').addEventListener('click', stopFlight);
 
-        // ----- 辅助函数 -----
-        function addMarkerA(lat, lng) {{
+        // ---------- 辅助函数 ----------
+        function addMarkerA(lat, lng) {
             markersA.forEach(m => map.removeLayer(m));
             markersA = [];
-            var icon = L.divIcon({{html: '<div style="font-size:20px; color:green;">🟢</div>', className: 'a-marker'}});
-            var m = L.marker([lat, lng], {{icon: icon, draggable: false}}).addTo(map).bindPopup("起点 A");
+            var icon = L.divIcon({html: '<div style="font-size:20px; color:green;">🟢</div>'});
+            var m = L.marker([lat, lng], {icon: icon}).addTo(map).bindPopup("起点 A");
             markersA.push(m);
-        }}
+        }
 
-        function addMarkerB(lat, lng) {{
+        function addMarkerB(lat, lng) {
             markersB.forEach(m => map.removeLayer(m));
             markersB = [];
-            var icon = L.divIcon({{html: '<div style="font-size:20px; color:red;">🔴</div>', className: 'b-marker'}});
-            var m = L.marker([lat, lng], {{icon: icon, draggable: false}}).addTo(map).bindPopup("终点 B");
+            var icon = L.divIcon({html: '<div style="font-size:20px; color:red;">🔴</div>'});
+            var m = L.marker([lat, lng], {icon: icon}).addTo(map).bindPopup("终点 B");
             markersB.push(m);
-        }}
+        }
 
-        function updateObsPreview() {{
-            if (drawLayer) {{
-                drawLayer.setLatLngs(tempObsPoints);
-            }}
-        }}
+        function updateObsPreview() {
+            if (drawLayer) drawLayer.setLatLngs(tempObsPoints);
+        }
 
-        function drawAllObstacles() {{
-            map.eachLayer(function(layer) {{
-                if (layer instanceof L.Polygon && layer.options.color === 'orange') {{
+        function drawAllObstacles() {
+            map.eachLayer(function(layer) {
+                if (layer instanceof L.Polygon && layer.options.color === 'orange') {
                     map.removeLayer(layer);
-                }}
-            }});
-            obstacles.forEach(function(pts) {{
-                L.polygon(pts, {{color: 'orange', fillOpacity: 0.4}}).addTo(map);
-            }});
-        }}
+                }
+            });
+            obstacles.forEach(function(pts) {
+                L.polygon(pts, {color: 'orange', fillOpacity: 0.4}).addTo(map);
+            });
+        }
 
-        function drawRoute(route) {{
+        function drawRoute(route) {
             if (routePath) map.removeLayer(routePath);
-            routePath = L.polyline(route, {{color: 'blue', weight: 5, opacity: 0.9}}).addTo(map);
+            routePath = L.polyline(route, {color: 'blue', weight: 5}).addTo(map);
             map.fitBounds(routePath.getBounds().pad(0.2));
-        }}
+        }
 
-        function interpolatePath(route, steps=15) {{
+        function interpolatePath(route, steps) {
+            steps = steps || 15;
             var smooth = [];
-            for (var i = 0; i < route.length-1; i++) {{
+            for (var i = 0; i < route.length - 1; i++) {
                 var lat1 = route[i][0], lng1 = route[i][1];
                 var lat2 = route[i+1][0], lng2 = route[i+1][1];
-                for (var s = 0; s < steps; s++) {{
+                for (var s = 0; s < steps; s++) {
                     var f = s / steps;
                     smooth.push([lat1 + (lat2 - lat1) * f, lng1 + (lng2 - lng1) * f]);
-                }}
-            }}
+                }
+            }
             smooth.push([route[route.length-1][0], route[route.length-1][1]]);
             return smooth;
-        }}
+        }
 
-        function startFlight() {{
+        function startFlight() {
             stopFlight();
-            if (!droneMarker) {{
-                var icon = L.divIcon({{html: '<div style="font-size:28px; color:blue;">✈️</div>'}});
-                droneMarker = L.marker(flightPath[0], {{icon: icon}}).addTo(map);
-            }}
+            if (!droneMarker) {
+                var icon = L.divIcon({html: '<div style="font-size:28px; color:blue;">✈️</div>'});
+                droneMarker = L.marker(flightPath[0], {icon: icon}).addTo(map);
+            }
             currentIndex = 0;
-            flightTimer = setInterval(function() {{
-                if (currentIndex < flightPath.length) {{
+            flightTimer = setInterval(function() {
+                if (currentIndex < flightPath.length) {
                     droneMarker.setLatLng(flightPath[currentIndex]);
                     currentIndex++;
-                }} else {{
+                } else {
                     stopFlight();
                     alert('✅ 无人机已到达目的地！');
-                }}
-            }}, 40);
-        }}
+                }
+            }, 40);
+        }
 
-        function stopFlight() {{
-            if (flightTimer) {{
-                clearInterval(flightTimer);
-                flightTimer = null;
-            }}
-        }}
+        function stopFlight() {
+            if (flightTimer) { clearInterval(flightTimer); flightTimer = null; }
+        }
 
-        function sendDataToPython() {{
-            var data = {{
-                a: pointA,
-                b: pointB,
-                obstacles: obstacles
-            }};
-            window.parent.postMessage({{
+        function sendDataToPython() {
+            var data = { a: pointA, b: pointB, obstacles: obstacles };
+            window.parent.postMessage({
                 type: "streamlit:setComponentValue",
                 value: data
-            }}, "*");
-        }}
+            }, "*");
+        }
+
+        // 控制台调试提示
+        console.log('🚁 无人机地图已就绪');
     </script>
 </body>
 </html>
 """
 
-# ===================== 渲染地图组件并接收返回值 =====================
-returned_data = st.components.v1.html(
-    html_code,
-    height=700,
-    scrolling=False
-)
+# 替换占位符
+html_code = html_template.replace("__INIT_DATA__", init_data_json)
 
-# 如果 JS 发送了新数据，更新 map_data
-if returned_data is not None:
+# ================== 渲染地图 ==================
+returned_data = st.components.v1.html(html_code, height=700, scrolling=False)
+
+# 接收 JS 回传的数据，更新 map_data
+if returned_data is not None and isinstance(returned_data, dict):
     st.session_state.map_data = returned_data
