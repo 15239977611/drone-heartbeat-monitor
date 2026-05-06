@@ -5,7 +5,7 @@ from shapely.ops import nearest_points
 from shapely.affinity import scale
 import math
 
-# ---------- 初始化 ----------
+# ===================== 初始化 =====================
 if "point_a" not in st.session_state:
     st.session_state.point_a = None
 if "point_b" not in st.session_state:
@@ -30,7 +30,7 @@ REAL_WORLD_HEIGHTS = {
     "大树/电线杆": 10, "操场/空地": 0, "桥梁/高架": 15, "塔楼/信号塔": 60
 }
 
-# ---------- 绕飞算法 (与之前相同) ----------
+# ===================== 绕飞算法 =====================
 def calculate_route(A, B, obstacles_all, heights, drone_h, safety_r, direction):
     OFFSET = safety_r / 111000.0
     route = [A]
@@ -63,7 +63,6 @@ def calculate_route(A, B, obstacles_all, heights, drone_h, safety_r, direction):
     route.append(B)
     return route
 
-# ---------- 生成插值路径 ----------
 def interpolate_path(path, steps=15):
     smooth = []
     for i in range(len(path)-1):
@@ -77,7 +76,7 @@ def interpolate_path(path, steps=15):
     smooth.append([path[-1][0], path[-1][1]])
     return smooth
 
-# ---------- 侧边栏 ----------
+# ===================== 界面 =====================
 st.set_page_config(layout="wide")
 st.title("✈️ 无人机避障飞行系统（零闪烁版）")
 
@@ -98,14 +97,13 @@ with st.sidebar:
         st.session_state.obstacles_all = []
         st.session_state.obstacles_height = []
         st.session_state.map_data["obstacles"] = []
+        st.rerun()
 
     st.markdown("---")
-    st.write("在地图上点击设置 A/B，点击「绘制障碍物」后开始圈选。")
+    st.write("在地图上点击按钮设置 A/B，点击「绘制障碍物」后开始圈选。")
     st.write("完成后点击下方按钮，将数据提交并计算航线。")
 
-    # 这个按钮是唯一会触发地图重绘的地方
     if st.button("📐 确认设置并计算航线"):
-        # 从 map_data 读取用户在地图上设置的数据
         A = None
         B = None
         if st.session_state.map_data.get("a"):
@@ -118,8 +116,7 @@ with st.sidebar:
             st.session_state.point_a = A
             st.session_state.point_b = B
             st.session_state.obstacles_all = obs
-            st.session_state.obstacles_height = [obs_height] * len(obs)  # 所有障碍物暂时用统一高度
-            # 计算航线
+            st.session_state.obstacles_height = [obs_height] * len(obs)
             route = calculate_route(
                 A, B,
                 st.session_state.obstacles_all,
@@ -132,10 +129,7 @@ with st.sidebar:
         else:
             st.warning("请先在地图上设置起点 A 和终点 B")
 
-# ---------- 构造传给 HTML 的数据 ----------
-route_js = json.dumps(st.session_state.route)
-
-# 把需要的初始数据序列化给 JS
+# ===================== 构造传给 HTML 的数据 =====================
 init_data = {
     "a": st.session_state.map_data.get("a"),
     "b": st.session_state.map_data.get("b"),
@@ -147,7 +141,7 @@ init_data = {
 }
 init_data_json = json.dumps(init_data)
 
-# ---------- 内嵌 HTML / JS 地图 ----------
+# ===================== 内嵌 HTML / JS 地图 =====================
 html_code = f"""
 <!DOCTYPE html>
 <html>
@@ -157,8 +151,13 @@ html_code = f"""
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <style>
+        html, body {{
+            height: 100%;
+            margin: 0;
+            padding: 0;
+        }}
         #map {{
-            height: 100vh;
+            height: 100%;
             width: 100%;
         }}
         .btn-container {{
@@ -175,7 +174,7 @@ html_code = f"""
         }}
     </style>
 </head>
-<body style="margin:0">
+<body>
     <div id="map"></div>
     <div class="btn-container">
         <button id="btn-set-a">🟢 设置起点 A</button>
@@ -194,15 +193,15 @@ html_code = f"""
             attribution: '© OpenStreetMap contributors'
         }}).addTo(map);
 
-        // 存储用户交互数据
+        // 数据状态
         var pointA = null;
         var pointB = null;
-        var tempObsPoints = [];        // 正在绘制中的多边形点
-        var obstacles = [];            // 已完成的障碍物，每个元素是 [[lat,lng],...]
+        var tempObsPoints = [];
+        var obstacles = [];
         var markersA = [];
         var markersB = [];
-        var drawMode = false;          // 是否在绘制障碍物
-        var drawLayer = null;          // 预览用
+        var drawMode = false;
+        var drawLayer = null;
 
         // 飞行相关
         var droneMarker = null;
@@ -214,7 +213,7 @@ html_code = f"""
         // 接收 Python 传来的数据
         var initData = {init_data_json};
 
-        // 初始化加载已有的数据（从 Python 端）
+        // 初始化已有数据
         if (initData.a) {{
             pointA = initData.a;
             addMarkerA(pointA[0], pointA[1]);
@@ -240,7 +239,7 @@ html_code = f"""
             }}
         }});
 
-        // ----- 按钮逻辑 -----
+        // ----- 按钮绑定 -----
         document.getElementById('btn-set-a').addEventListener('click', function() {{
             if (drawMode) return alert('请先完成障碍物绘制');
             map.once('click', function(e) {{
@@ -319,7 +318,6 @@ html_code = f"""
         }}
 
         function drawAllObstacles() {{
-            // 移除已存在的障碍物图层（简单做法：重新构建即可）
             map.eachLayer(function(layer) {{
                 if (layer instanceof L.Polygon && layer.options.color === 'orange') {{
                     map.removeLayer(layer);
@@ -333,7 +331,6 @@ html_code = f"""
         function drawRoute(route) {{
             if (routePath) map.removeLayer(routePath);
             routePath = L.polyline(route, {{color: 'blue', weight: 5, opacity: 0.9}}).addTo(map);
-            // 适配边界
             map.fitBounds(routePath.getBounds().pad(0.2));
         }}
 
@@ -377,7 +374,6 @@ html_code = f"""
         }}
 
         function sendDataToPython() {{
-            // 更新 Python 端的 map_data（不触发 Python 计算，只是保存状态）
             var data = {{
                 a: pointA,
                 b: pointB,
@@ -393,41 +389,15 @@ html_code = f"""
 </html>
 """
 
-# ---------- 显示地图组件 ----------
-map_output = st.components.v1.html(
-    html_code,
-    height=700,
-    scrolling=False
-)
-
-# 在这里接收来自 JS 的数据（只用于保存，不自动重绘地图）
-if "map_data_receiver" not in st.session_state:
-    st.session_state.map_data_receiver = None
-
-# 由于 st.components.v1.html 的返回值是通过 on_change 来的，我们直接使用 st.experimental_get_query_params 之类比较麻烦。
-# 这里使用一个技巧：我们不需要自动获取返回值，因为我们仅在点击“确认设置”时才需要数据。
-# 点击“确认设置”按钮时，直接从之前累积的 map_data（通过 JS 发送时会自动更新 session_state）
-# 但 st.components.v1.html 的返回值需要设置 key 和 on_change，这里为了简单，我们换一种更可靠的方式：
-# 我们可以用一个 callback 来捕获 JS 传回的数据。
-# 但简化起见，我们让用户必须点击侧边栏的按钮，那时数据已经通过 JS 的 sendDataToPython 存在于 streamlit 的 session 中吗？
-# 是的，如果组件正确返回了数据，我们可以读取它。
-
-# 我们需要处理组件返回值：
-if "map_data" not in st.session_state:
-    st.session_state.map_data = {"a": None, "b": None, "obstacles": []}
-
-# 捕获组件回传（st.components.v1.html 支持 on_change 回调）
+# ===================== 回调函数 =====================
 def update_map_data(new_value):
-    st.session_state.map_data = new_value
+    if new_value is not None:
+        st.session_state.map_data = new_value
 
-# 重新渲染时需要用 key，并绑定 on_change
-# 注意：每次 rerun 会重新创建组件，但如果 key 不变且 html 内容没变，组件不会重新执行 JS。
-# 为了在数据不变时不重建，我们把 html 内容用 key 固定。
-# 但这里 html_code 依赖 init_data_json，而 init_data_json 在未确认时不变，所以地图不会重绘。
+# ===================== 只渲染一次地图组件（无 key 参数） =====================
 st.components.v1.html(
     html_code,
     height=700,
     scrolling=False,
-    key="leaflet_map",
     on_change=update_map_data
 )
