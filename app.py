@@ -273,12 +273,12 @@ map_html = """
 </div>
 """
 
-# ==================== 渲染地图 ====================
+# ==================== 渲染地图（已修复：去掉 key） ====================
 st.title("✈️ 无人机自主避障航线规划系统")
-components.html(map_html, height=850, key=f"map_{st.session_state.map_key}")
+components.html(map_html, height=850)
 
 # ==================== 接收数据 ====================
-returned_data = st.session_state.get(f"component_map_{st.session_state.map_key}")
+returned_data = st.session_state.get("component_map_0")
 if returned_data is not None and isinstance(returned_data, dict):
     a = returned_data.get("a")
     b = returned_data.get("b")
@@ -290,13 +290,13 @@ if returned_data is not None and isinstance(returned_data, dict):
         st.session_state.obstacles_all = obs
         st.session_state.obstacles_height = [obstacle_height] * len(obs)
 
-# ==================== 实时绘制航线 ====================
+# ==================== 实时绘制航线（去掉 key） ====================
 if st.session_state.route:
     components.html(f"""
     <script>
         window.drawRoute({json.dumps(st.session_state.route)});
     </script>
-    """, height=0, key="draw_route")
+    """, height=0)
 
 st.markdown("---")
 st.caption("✅ 操作步骤：设置A/B点 → 绘制障碍物 → 侧边栏计算航线 → 开始飞行")
