@@ -38,45 +38,34 @@ def calculate_route(A, B, obstacles_all, heights, drone_h, safety_r, direction):
     for i, coords in enumerate(obstacles_all):
         if len(coords) < 3:
             continue
-        h = heights[i] if i < len(heights) else 0
+        h = heights[i]
         if h <= drone_h:
             continue
-        
         try:
-            poly_coords = [(lng, lat) for lat, lng in coords]
-            poly = Polygon(poly_coords)
-            scale_factor = 1 + (safety_r / 111000.0) / max(poly.bounds[2]-poly.bounds[0], poly.bounds[3]-poly.bounds[1], 1e-6)
-            safe_poly = scale(poly, xfact=scale_factor, yfact=scale_factor, origin='centroid')
-            line = LineString([(route[-1][1], route[-1][0]), (B[1], B[0])])
-            
+            poly = Polygon(coords)
+            safe_poly = scale(poly, 1 + safety_r/1600, 1 + safety_r/1600, origin='centroid')
+            cx, cy = poly.centroid.x, poly.centroid.y
+            line = LineString([route[-1], B])
             if not line.intersects(safe_poly):
                 continue
-            
             p, _ = nearest_points(line, safe_poly.boundary)
             px, py = p.x, p.y
-            cx, cy = poly.centroid.x, poly.centroid.y
             dx, dy = px - cx, py - cy
             dist = math.hypot(dx, dy) or 1
             dx, dy = dx/dist, dy/dist
-            
             if direction == "左":
                 wx, wy = -dy, dx
             else:
                 wx, wy = dy, -dx
-            
-            offset_lng = px + wx * OFFSET
-            offset_lat = py + wy * OFFSET
-            route.append((offset_lat, offset_lng))
-            
-        except Exception as e:
+            route.append((px + wx * OFFSET, py + wy * OFFSET))
+        except:
             continue
-    
     route.append(B)
     return route
 
 # ================== 侧边栏 ==================
 st.set_page_config(layout="wide")
-st.title("✈️ 无人机避障飞行系统（完美无错版）")
+st.title("✈️ 无人机避障飞行系统（零闪烁版）")
 
 with st.sidebar:
     st.subheader("🛸 飞行参数")
@@ -98,12 +87,22 @@ with st.sidebar:
         st.rerun()
 
     st.markdown("---")
+    st.write("在地图上用按钮设置 A/B，圈选障碍物后点击下方按钮计算航线。")
 
     if st.button("📐 确认设置并计算航线"):
-        A = st.session_state.point_a
-        B = st.session_state.point_b
+        A = None
+        B = None
+        if st.session_state.map_data.get("a"):
+            A = tuple(st.session_state.map_data["a"])
+        if st.session_state.map_data.get("b"):
+            B = tuple(st.session_state.map_data["b"])
+        obs = st.session_state.map_data.get("obstacles", [])
 
         if A and B:
+            st.session_state.point_a = A
+            st.session_state.point_b = B
+            st.session_state.obstacles_all = obs
+            st.session_state.obstacles_height = [obs_height] * len(obs)
             route = calculate_route(
                 A, B,
                 st.session_state.obstacles_all,
@@ -113,7 +112,6 @@ with st.sidebar:
                 st.session_state.avoid_direction
             )
             st.session_state.route = route
-            st.success("✅ 航线计算完成！")
         else:
             st.warning("请先在地图上设置起点 A 和终点 B")
 
@@ -178,6 +176,7 @@ html_template = """
 
         var initData = __INIT_DATA__;
 
+        // 初始化已有图形
         if (initData.a) { pointA = initData.a; addMarkerA(pointA[0], pointA[1]); }
         if (initData.b) { pointB = initData.b; addMarkerB(pointB[0], pointB[1]); }
         if (initData.obstacles && initData.obstacles.length) {
@@ -317,21 +316,9 @@ html_template = """
 
 html_code = html_template.replace("__INIT_DATA__", init_data_json)
 
-# ===================== ✅ 100% 无报错 接收数据 =====================
-st.components.v1.html(html_code, height=700, scrolling=False)
+# 渲染地图，接收 JS 回传的数据
+returned_data = st.components.v1.html(html_code, height=700, scrolling=False)
 
-try:
-    returned_data = st.session_state.get("component_value")
-    if returned_data and isinstance(returned_data, dict):
-        st.session_state.map_data = returned_data
-
-        # 安全赋值，绝对不会报错
-        if returned_data.get("a") is not None:
-            st.session_state.point_a = tuple(returned_data["a"])
-        if returned_data.get("b") is not None:
-            st.session_state.point_b = tuple(returned_data["b"])
-        if returned_data.get("obstacles") is not None:
-            st.session_state.obstacles_all = returned_data["obstacles"]
-            st.session_state.obstacles_height = [obs_height] * len(returned_data["obstacles"])
-except:
-    pass
+# 更新 map_data
+if returned_data is not None and isinstance(returned_data, dict):
+    st.session_state.map_data = returned_data
