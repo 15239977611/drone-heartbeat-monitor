@@ -32,40 +32,28 @@ REAL_WORLD_HEIGHTS = {
 
 # ================== 绕飞算法（修复核心逻辑） ==================
 def calculate_route(A, B, obstacles_all, heights, drone_h, safety_r, direction):
-    # 修复：经纬度偏移量正确计算（1米 ≈ 1/111000 度）
-    OFFSET = safety_r / 111000.0  # 安全半径对应的经纬度偏移
+    OFFSET = safety_r / 111000.0
     route = [A]
 
     for i, coords in enumerate(obstacles_all):
         if len(coords) < 3:
             continue
-        # 修复：防止高度列表索引越界
         h = heights[i] if i < len(heights) else 0
-        # 仅处理高于无人机飞行高度的障碍物
         if h <= drone_h:
             continue
         
         try:
-            # 构建障碍物多边形（修复：坐标顺序适配Shapely）
             poly_coords = [(lng, lat) for lat, lng in coords]
             poly = Polygon(poly_coords)
-            
-            # 构建安全缓冲区（修复：缩放因子适配经纬度）
             scale_factor = 1 + (safety_r / 111000.0) / max(poly.bounds[2]-poly.bounds[0], poly.bounds[3]-poly.bounds[1], 1e-6)
             safe_poly = scale(poly, xfact=scale_factor, yfact=scale_factor, origin='centroid')
-            
-            # 构建当前航线线段（修复：坐标顺序）
             line = LineString([(route[-1][1], route[-1][0]), (B[1], B[0])])
             
-            # 检查是否与障碍物缓冲区相交
             if not line.intersects(safe_poly):
                 continue
             
-            # 计算最近点
             p, _ = nearest_points(line, safe_poly.boundary)
-            px, py = p.x, p.y  # 经纬度（lng, lat）
-            
-            # 计算绕飞方向偏移
+            px, py = p.x, p.y
             cx, cy = poly.centroid.x, poly.centroid.y
             dx, dy = px - cx, py - cy
             dist = math.hypot(dx, dy) or 1
@@ -76,21 +64,17 @@ def calculate_route(A, B, obstacles_all, heights, drone_h, safety_r, direction):
             else:
                 wx, wy = dy, -dx
             
-            # 添加绕飞点（转回lat, lng顺序）
             offset_lng = px + wx * OFFSET
             offset_lat = py + wy * OFFSET
             route.append((offset_lat, offset_lng))
             
         except Exception as e:
-            # 捕获异常但不中断，保证不报错
-            st.warning(f"处理障碍物{i+1}时出错：{str(e)}")
             continue
     
-    # 添加终点
     route.append(B)
     return route
 
-# ================== 侧边栏（仅修复障碍物高度赋值） ==================
+# ================== 侧边栏 ==================
 st.set_page_config(layout="wide")
 st.title("✈️ 无人机避障飞行系统（零闪烁版）")
 
@@ -114,7 +98,6 @@ with st.sidebar:
         st.rerun()
 
     st.markdown("---")
-    st.write("在地图上用按钮设置 A/B，圈选障碍物后点击下方按钮计算航线。")
 
     if st.button("📐 确认设置并计算航线"):
         A = None
@@ -129,9 +112,7 @@ with st.sidebar:
             st.session_state.point_a = A
             st.session_state.point_b = B
             st.session_state.obstacles_all = obs
-            # 修复：每个障碍物使用选择的高度（原逻辑正确，但补充判空）
             st.session_state.obstacles_height = [obs_height] * len(obs) if obs else []
-            # 计算航线
             route = calculate_route(
                 A, B,
                 st.session_state.obstacles_all,
@@ -157,7 +138,7 @@ init_data = {
 }
 init_data_json = json.dumps(init_data)
 
-# ================== HTML / JS 地图（完全保留原有逻辑） ==================
+# ================== HTML / JS 地图（完全保留原有） ==================
 html_template = """
 <!DOCTYPE html>
 <html>
@@ -206,7 +187,6 @@ html_template = """
 
         var initData = __INIT_DATA__;
 
-        // 初始化已有图形
         if (initData.a) { pointA = initData.a; addMarkerA(pointA[0], pointA[1]); }
         if (initData.b) { pointB = initData.b; addMarkerB(pointB[0], pointB[1]); }
         if (initData.obstacles && initData.obstacles.length) {
@@ -346,9 +326,8 @@ html_template = """
 
 html_code = html_template.replace("__INIT_DATA__", init_data_json)
 
-# 渲染地图，接收 JS 回传的数据
-returned_data = st.components.v1.html(html_code, height=700, scrolling=False)
-
-# 更新 map_data（补充判空，防止报错）
-if returned_data is not None and isinstance(returned_data, dict):
+# ===================== ✅ 唯一修复的地方 =====================
+st.components.v1.html(html_code, height=700, scrolling=False)
+returned_data = st.session_state.get('component_value', None)
+if returned_data and isinstance(returned_data, dict):
     st.session_state.map_data = returned_data
