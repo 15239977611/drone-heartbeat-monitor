@@ -24,13 +24,25 @@ if "drone_safety_radius" not in st.session_state:
 if "avoid_direction" not in st.session_state:
     st.session_state.avoid_direction = "左"
 
-# 飞行状态（无闪烁核心）
+# 飞行状态
 if "flight_path" not in st.session_state:
     st.session_state.flight_path = []
 if "drone_pos" not in st.session_state:
     st.session_state.drone_pos = None
 if "flight_idx" not in st.session_state:
     st.session_state.flight_idx = 0
+
+# 地图视野记忆（关键修改）
+if "map_center" not in st.session_state:
+    st.session_state.map_center = [32.2330, 118.7490]   # 默认南京
+if "map_zoom" not in st.session_state:
+    st.session_state.map_zoom = 18
+
+# 障碍物圈选临时存储
+if "drawing" not in st.session_state:
+    st.session_state.drawing = False
+if "temp_points" not in st.session_state:
+    st.session_state.temp_points = []
 
 GROUND_HEIGHT = 0
 REAL_WORLD_HEIGHTS = {
@@ -61,7 +73,8 @@ def calculate_route():
     drone_h = st.session_state.drone_height
     safety_r = st.session_state.drone_safety_radius
     direction = st.session_state.avoid_direction
-    OFFSET = safety_r / 12000.0
+    # 将米转为大概的经纬度偏移量（1度约111km，此处为粗略值）
+    OFFSET = safety_r / 111000.0   # 之前是/12000，修正为地理近似值
     route = [A]
 
     for i, coords in enumerate(st.session_state.obstacles_all):
@@ -136,40 +149,61 @@ with st.sidebar:
 
     st.subheader("🌍 障碍物")
     obs_type = st.selectbox("障碍物类型", list(REAL_WORLD_HEIGHTS.keys()))
-    if st.button("🟢 开始圈选障碍物"):
-        st.session_state["drawing"] = True
-        st.session_state["temp_points"] = []
-    if st.button("✅ 完成圈选"):
-        if len(st.session_state.get("temp_points", [])) >= 3:
-            pts = st.session_state.temp_points
-            pts.append(pts[0])
-            st.session_state.obstacles_all.append(pts)
-            st.session_state.obstacles_height.append(REAL_WORLD_HEIGHTS[obs_type])
+    col_obs1, col_obs2 = st.columns(2)
+    with col_obs1:
+        if st.button("🟢 开始圈选障碍物"):
+            st.session_state.drawing = True
+            st.session_state.temp_points = []
+    with col_obs2:
+        if st.button("✅ 完成圈选"):
+            if len(st.session_state.temp_points) >= 3:
+                pts = st.session_state.temp_points[:]
+                pts.append(pts[0])  # 闭合
+                st.session_state.obstacles_all.append(pts)
+                st.session_state.obstacles_height.append(REAL_WORLD_HEIGHTS[obs_type])
+                st.session_state.drawing = False
+                st.session_state.temp_points = []
+            else:
+                st.warning("至少需要3个点才能形成障碍物区域")
     if st.button("🗑️ 清空所有障碍物"):
         st.session_state.obstacles_all = []
         st.session_state.obstacles_height = []
 
     st.subheader("📍 标记点位")
-    if st.button("🟢 设置起点 A"):
+    if st.button("🟢 重新设置起点 A"):
         st.session_state.point_a = None
-    if st.button("🔴 设置终点 B"):
+    if st.button("🔴 重新设置终点 B"):
         st.session_state.point_b = None
 
 # ===================== 地图绘制（稳定不闪） =====================
 route = calculate_route()
-center_loc = st.session_state.point_a if st.session_state.point_a else [32.2330, 118.7490]
-m = folium.Map(location=center_loc, zoom_start=18, tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", attr="ESRI")
+# 使用保存的视野，不再自动跟踪A点
+m = folium.Map(
+    location=st.session_state.map_center,
+    zoom_start=st.session_state.map_zoom,
+    tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+    attr="ESRI"
+)
 
 # 绘制 A B
 if st.session_state.point_a:
-    folium.CircleMarker(st.session_state.point_a, radius=10, color="green", fill=True).add_to(m)
+    folium.CircleMarker(st.session_state.point_a, radius=10, color="green", fill=True,
+                        popup="起点 A").add_to(m)
 if st.session_state.point_b:
-    folium.CircleMarker(st.session_state.point_b, radius=10, color="red", fill=True).add_to(m)
+    folium.CircleMarker(st.session_state.point_b, radius=10, color="red", fill=True,
+                        popup="终点 B").add_to(m)
 
 # 绘制障碍物
 for obs in st.session_state.obstacles_all:
     if len(obs) > 2:
         folium.Polygon(obs, color="orange", fill=True, fill_opacity=0.4).add_to(m)
+
+# 绘制临时圈选点（预览线）
+if st.session_state.drawing and len(st.session_state.temp_points) >= 2:
+    folium.PolyLine(st.session_state.temp_points, color="red", weight=3, dash_array="5,5").add_to(m)
+    # 绘制临时点标记
+    for pt in st.session_state.temp_points:
+        folium.CircleMarker(pt, radius=4, color="darkred", fill=True).add_to(m)
 
 # 绘制航线
 if len(route) >= 2:
@@ -186,22 +220,34 @@ if st.session_state.drone_pos:
 # 固定地图容器 → 彻底解决闪烁
 map_container = st.empty()
 with map_container:
-    map_output = st_folium(m, height=700, key="static_map", returned_objects=["last_clicked"])
+    map_output = st_folium(
+        m,
+        height=700,
+        key="static_map",
+        returned_objects=["last_clicked", "center", "zoom"]   # 增加 center 和 zoom
+    )
 
-# ===================== 点击设置 A B / 圈选障碍物 =====================
+# ===================== 更新视野（关键） =====================
+if map_output and map_output.get("center") and map_output.get("zoom"):
+    st.session_state.map_center = [map_output["center"]["lat"], map_output["center"]["lng"]]
+    st.session_state.map_zoom = map_output["zoom"]
+
+# ===================== 点击处理 =====================
 if map_output and map_output.get("last_clicked"):
     lat = map_output["last_clicked"]["lat"]
     lng = map_output["last_clicked"]["lng"]
 
-    if st.session_state.get("drawing", False):
+    if st.session_state.drawing:
+        # 圈选模式：添加临时点
         st.session_state.temp_points.append([lat, lng])
     else:
+        # 正常设置 A 或 B
         if st.session_state.point_a is None:
             st.session_state.point_a = (lat, lng)
         elif st.session_state.point_b is None:
             st.session_state.point_b = (lat, lng)
 
-# ===================== 飞行循环（超级平滑、不闪烁） =====================
+# ===================== 飞行循环 =====================
 if st.session_state.drone_pos and st.session_state.flight_path:
     total = len(st.session_state.flight_path)
     if st.session_state.flight_idx < total - 1:
@@ -211,3 +257,4 @@ if st.session_state.drone_pos and st.session_state.flight_path:
         st.rerun()
     else:
         st.success("✅ 无人机已到达目的地！")
+        # 到达后停留，不清空 pos 以便看到最终位置
