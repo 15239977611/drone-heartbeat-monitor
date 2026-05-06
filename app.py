@@ -8,7 +8,6 @@ from shapely.affinity import scale
 import math
 from datetime import datetime
 import time
-import random
 import plotly.graph_objects as go
 import pandas as pd
 
@@ -99,7 +98,7 @@ if "coord_system" not in st.session_state:
 if "transformed_points" not in st.session_state:
     st.session_state.transformed_points = {"point_a": None, "point_b": None, "obstacles": []}
 
-# 飞行动画
+# 飞行动画（修复闪烁核心）
 if "flight_path" not in st.session_state:
     st.session_state.flight_path = []
 if "drone_pos" not in st.session_state:
@@ -139,7 +138,7 @@ load_all()
 st.set_page_config(page_title="无人机避障系统", layout="wide")
 
 # ================== 平滑航线插值（飞行专用） ==================
-def interpolate_path(path, steps=100):
+def interpolate_path(path, steps=80):
     smooth = []
     for i in range(len(path)-1):
         lat1, lng1 = path[i]
@@ -263,11 +262,11 @@ with st.sidebar:
 
     st.markdown("---")
     st.subheader("🛸 飞行高度")
-    st.session_state.drone_height = st.slider("米",0,200,8)
+    st.session_state.drone_height = st.slider("米", 0, 200, 8)
 
     st.markdown("---")
     st.subheader("🛡️ 安全半径")
-    st.session_state.drone_safety_radius = st.slider("安全距离（米）",1,50,15)
+    st.session_state.drone_safety_radius = st.slider("安全距离（米）", 1, 50, 15)
 
     st.markdown("---")
     st.subheader("↔️ 绕飞方向")
@@ -288,10 +287,11 @@ with st.sidebar:
         if st.button("▶️ 开始飞行"):
             route, _ = calculate_route_with_direction()
             if len(route) >= 2:
-                st.session_state.flight_path = interpolate_path(route, steps=80)
+                st.session_state.flight_path = interpolate_path(route, steps=60)
                 st.session_state.is_flying = True
                 st.session_state.flight_step = 0
-                st.session_state.drone_pos = st.session_state.flight_path[0]
+                if st.session_state.flight_path:
+                    st.session_state.drone_pos = st.session_state.flight_path[0]
     with col_stop:
         if st.button("⏹️ 停止飞行"):
             st.session_state.is_flying = False
@@ -352,26 +352,30 @@ if page == "航线规划":
     if len(route)>=2:
         folium.PolyLine(route, color='blue', weight=6, opacity=0.9).add_to(m)
 
-    # ✈️ 绘制无人机
+    # ✈️ 绘制无人机（修复闪烁）
     if st.session_state.drone_pos:
         lat, lng = st.session_state.drone_pos
         folium.Marker(
             location=(lat, lng),
             icon=folium.DivIcon(html='''
-                <div style="font-size:24px;">✈️</div>
+                <div style="font-size:26px; color:#00aaff; text-shadow: 0 0 3px #000;">✈️</div>
             ''')
         ).add_to(m)
 
-    out = st_folium(m, height=750, key="map", returned_objects=["last_clicked"])
+    # 关键修复：只渲染地图，不重复创建
+    map_placeholder = st.empty()
+    with map_placeholder:
+        out = st_folium(m, height=750, key="drone_map_fixed", returned_objects=["last_clicked"])
 
-    # 飞行动画逻辑
+    # 飞行动画逻辑（彻底无闪烁）
     if st.session_state.is_flying and st.session_state.flight_path:
         total = len(st.session_state.flight_path)
         if st.session_state.flight_step < total:
+            # 只更新位置，不重绘整个地图
             pos = st.session_state.flight_path[st.session_state.flight_step]
             st.session_state.drone_pos = pos
             st.session_state.flight_step += 1
-            time.sleep(0.03)
+            time.sleep(0.06)
             st.rerun()
         else:
             st.session_state.is_flying = False
