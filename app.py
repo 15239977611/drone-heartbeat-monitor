@@ -6,8 +6,8 @@ from shapely.affinity import scale
 import math
 
 # ===================== 初始化 =====================
-if "point_a" not in st.session_state:
-    st.session_state.point_a = None
+if "map_data" not in st.session_state or not isinstance(st.session_state.map_data, dict):
+    st.session_state.map_data = {"a": None, "b": None, "obstacles": []}
 if "point_b" not in st.session_state:
     st.session_state.point_b = None
 if "obstacles_all" not in st.session_state:
