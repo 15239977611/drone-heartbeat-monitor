@@ -304,7 +304,7 @@ html_template = """
         function sendDataToPython() {
             var data = { a: pointA, b: pointB, obstacles: obstacles };
             window.parent.postMessage({
-                type: "streamlit:setComponentValue",
+                type: "streamlit:component",
                 value: data
             }, "*");
         }
