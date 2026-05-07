@@ -22,12 +22,12 @@ def gcj02_to_wgs84(lon, lat):
 
 # ===================== 初始化（用你提供的真实坐标） =====================
 defaults = {
-    "point_a": (32.2322, 118.7490),  # 你给的A点
-    "point_b": (32.2343, 118.7490),  # 你给的B点
+    "point_a": (32.2322, 118.7490),
+    "point_b": (32.2343, 118.7490),
     "obstacles_all": [],
     "obstacles_height": [],
     "obstacle_names": [],
-    "drone_height": 50,              # 你截图里的50m
+    "drone_height": 50,
     "drone_safety_radius": 15,
     "avoid_mode": "向左绕飞",
     "flight_path": [],
@@ -119,33 +119,33 @@ def calculate_route():
 st.set_page_config(layout="wide")
 tab1, tab2 = st.tabs(["✅ 航线规划", "🚁 飞行监控（心跳包+任务面板）"])
 
-# --------------------- 标签1：航线规划（和你截图的控制面板一致） ---------------------
+# --------------------- 标签1：航线规划 ---------------------
 with tab1:
     st.title("📌 无人机航线规划系统（GCJ-02坐标系）")
     col_left, col_right = st.columns([1, 3])
 
     with col_left:
         st.subheader("📍 起点 A (GCJ-02)")
-        a_lat = st.number_input("纬度", value=32.2322, format="%.4f")
-        a_lng = st.number_input("经度", value=118.7490, format="%.3f")
-        if st.button("✅ 设置A点"):
+        a_lat = st.number_input("A点纬度", value=32.2322, format="%.4f", key="a_lat")
+        a_lng = st.number_input("A点经度", value=118.7490, format="%.3f", key="a_lng")
+        if st.button("✅ 设置A点", key="set_a"):
             st.session_state.point_a = (a_lat, a_lng)
 
         st.subheader("📍 终点 B (GCJ-02)")
-        b_lat = st.number_input("纬度", value=32.2343, format="%.4f")
-        b_lng = st.number_input("经度", value=118.7490, format="%.3f")
-        if st.button("✅ 设置B点"):
+        b_lat = st.number_input("B点纬度", value=32.2343, format="%.4f", key="b_lat")
+        b_lng = st.number_input("B点经度", value=118.7490, format="%.3f", key="b_lng")
+        if st.button("✅ 设置B点", key="set_b"):
             st.session_state.point_b = (b_lat, b_lng)
 
         st.subheader("🛠️ 飞行参数")
-        st.session_state.drone_height = st.slider("设定飞行高度(m)", 0, 150, 50)
-        st.session_state.drone_safety_radius = st.slider("安全半径(m)", 1, 50, 15)
-        st.session_state.avoid_mode = st.radio("绕飞模式", ["向左绕飞", "向右绕飞", "最短弧线"])
+        st.session_state.drone_height = st.slider("设定飞行高度(m)", 0, 150, 50, key="drone_h")
+        st.session_state.drone_safety_radius = st.slider("安全半径(m)", 1, 50, 15, key="safety_r")
+        st.session_state.avoid_mode = st.radio("绕飞模式", ["向左绕飞", "向右绕飞", "最短弧线"], key="avoid_mode")
 
         st.subheader("✈️ 飞行控制")
         c1, c2 = st.columns(2)
         with c1:
-            if st.button("▶️ 开始飞行"):
+            if st.button("▶️ 开始飞行", key="start1"):
                 route = calculate_route()
                 if len(route) >= 2:
                     st.session_state.flight_path = interpolate_path(route)
@@ -154,23 +154,23 @@ with tab1:
                     st.session_state.task_state = "执行中"
                     st.session_state.task_time = 0
         with c2:
-            if st.button("⏹️ 停止"):
+            if st.button("⏹️ 停止", key="stop1"):
                 st.session_state.drone_pos = None
                 st.session_state.task_state = "已暂停"
 
         st.subheader("🟥 障碍物圈选（记忆）")
-        h = st.slider("障碍物高度(m)", 5, 150, 30)
-        if st.button("🟢 开始圈选"):
+        h = st.slider("障碍物高度(m)", 5, 150, 30, key="obs_h")
+        if st.button("🟢 开始圈选", key="draw_start"):
             st.session_state.drawing_mode = True
             st.session_state.temp_points = []
-        if st.button("✅ 完成圈选并保存"):
+        if st.button("✅ 完成圈选并保存", key="draw_save"):
             if len(st.session_state.temp_points) >= 3:
                 st.session_state.temp_points.append(st.session_state.temp_points[0])
                 st.session_state.obstacles_all.append(st.session_state.temp_points)
                 st.session_state.obstacles_height.append(h)
                 st.session_state.obstacle_names.append(f"障碍{len(st.session_state.obstacles_all)}")
                 st.success(f"已保存障碍，高度={h}m")
-        if st.button("🗑️ 清空所有障碍物"):
+        if st.button("🗑️ 清空所有障碍物", key="clear_obs"):
             st.session_state.obstacles_all = []
             st.session_state.obstacles_height = []
             st.session_state.obstacle_names = []
@@ -205,21 +205,19 @@ with tab1:
 
         map_out = st_folium(m, height=750, key="map1", returned_objects=["last_clicked"])
 
-        # 圈选点采集
         if map_out and map_out.get("last_clicked"):
             lat = map_out["last_clicked"]["lat"]
             lng = map_out["last_clicked"]["lng"]
             if st.session_state.drawing_mode:
                 st.session_state.temp_points.append([lat, lng])
 
-# --------------------- 标签2：飞行监控（和参考模板完全对齐） ---------------------
+# --------------------- 标签2：飞行监控 ---------------------
 with tab2:
     st.title("🚁 飞行实时画面 - 任务执行监控")
 
-    # 任务控制按钮
     col_btn = st.columns([1, 1, 1, 1, 0.3])
     with col_btn[0]:
-        if st.button("▶️ 开始任务", type="primary", use_container_width=True):
+        if st.button("▶️ 开始任务", type="primary", use_container_width=True, key="task_start"):
             route = calculate_route()
             if len(route) >= 2:
                 st.session_state.flight_path = interpolate_path(route)
@@ -228,14 +226,14 @@ with tab2:
                 st.session_state.task_state = "执行中"
                 st.session_state.task_time = 0
     with col_btn[1]:
-        if st.button("⏸️ 暂停", use_container_width=True):
+        if st.button("⏸️ 暂停", use_container_width=True, key="task_pause"):
             st.session_state.task_state = "已暂停"
     with col_btn[2]:
-        if st.button("⏹️ 停止", use_container_width=True):
+        if st.button("⏹️ 停止", use_container_width=True, key="task_stop"):
             st.session_state.drone_pos = None
             st.session_state.task_state = "已暂停"
     with col_btn[3]:
-        if st.button("🔄 重置", use_container_width=True):
+        if st.button("🔄 重置", use_container_width=True, key="task_reset"):
             st.session_state.flight_idx = 0
             st.session_state.drone_pos = None
             st.session_state.task_state = "已暂停"
@@ -245,28 +243,25 @@ with tab2:
 
     st.divider()
 
-    # 任务状态面板（和模板一致）
     col_status = st.columns(6)
     with col_status[0]:
-        st.metric("当前航点", f"{st.session_state.flight_idx}/{len(st.session_state.flight_path) if st.session_state.flight_path else 0}")
+        st.metric("当前航点", f"{st.session_state.flight_idx}/{len(st.session_state.flight_path) if st.session_state.flight_path else 0}", key="metric1")
     with col_status[1]:
-        st.metric("飞行速度", f"{st.session_state.task_speed} m/s")
+        st.metric("飞行速度", f"{st.session_state.task_speed} m/s", key="metric2")
     with col_status[2]:
-        st.metric("已用时间", f"{st.session_state.task_time//60:02d}:{st.session_state.task_time%60:02d}")
+        st.metric("已用时间", f"{st.session_state.task_time//60:02d}:{st.session_state.task_time%60:02d}", key="metric3")
     with col_status[3]:
         remaining = max(0, len(st.session_state.flight_path) - st.session_state.flight_idx) if st.session_state.flight_path else 0
-        st.metric("剩余距离", f"{remaining} m")
+        st.metric("剩余距离", f"{remaining} m", key="metric4")
     with col_status[4]:
-        st.metric("预计到达", "00:00")
+        st.metric("预计到达", "00:00", key="metric5")
     with col_status[5]:
-        st.metric("电量模拟", f"{st.session_state.task_battery}%")
+        st.metric("电量模拟", f"{st.session_state.task_battery}%", key="metric6")
 
-    # 任务进度条
     progress = min(100, int(100 * st.session_state.flight_idx / len(st.session_state.flight_path)) if st.session_state.flight_path else 0)
     st.progress(progress, text=f"任务进度: {progress}%")
     st.divider()
 
-    # 实时地图 + 通信链路面板
     col_map, col_comm = st.columns([2, 1])
     with col_map:
         st.subheader("🗺️ 实时飞行地图")
@@ -308,7 +303,6 @@ with tab2:
         </div>
         """, unsafe_allow_html=True)
 
-        # 链路拓扑卡片（和模板一致）
         col_gcs, col_obc, col_fcu = st.columns(3)
         with col_gcs:
             st.markdown("""
@@ -338,7 +332,6 @@ with tab2:
             </div>
             """, unsafe_allow_html=True)
 
-        # 链路状态
         st.markdown("""
         <div style="display:flex;justify-content:space-around;margin:10px 0;">
             <div>⬆️⬇️ UDP:14550</div>
@@ -353,7 +346,6 @@ with tab2:
         </div>
         """, unsafe_allow_html=True)
 
-        # 心跳包日志（按老师要求放在飞行监控界面）
         st.subheader("🧠 心跳包日志")
         now = time.strftime("%H:%M:%S")
         if st.session_state.drone_pos:
