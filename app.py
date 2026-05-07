@@ -5,6 +5,9 @@ from shapely.ops import nearest_points
 from shapely.affinity import scale
 import math
 
+# 安装: pip install streamlit-bridge
+from st_bridge import bridge, html
+
 # ================== 初始化 ==================
 if "point_a" not in st.session_state:
     st.session_state.point_a = None
@@ -126,6 +129,14 @@ init_data = {
     "avoid_direction": st.session_state.avoid_direction
 }
 init_data_json = json.dumps(init_data)
+
+# ================== 使用 streamlit-bridge 接收数据 ==================
+# 创建桥接组件，接收来自JavaScript的数据
+map_data_received = bridge("map-bridge", default=None)
+
+# 如果收到了数据，更新 session_state
+if map_data_received is not None and isinstance(map_data_received, dict):
+    st.session_state.map_data = map_data_received
 
 # ================== HTML / JS 地图 ==================
 html_template = """
@@ -301,12 +312,15 @@ html_template = """
         function stopFlight() {
             if (flightTimer) { clearInterval(flightTimer); flightTimer = null; }
         }
+        // 使用 streamlit-bridge 发送数据到 Python
         function sendDataToPython() {
             var data = { a: pointA, b: pointB, obstacles: obstacles };
-            window.parent.postMessage({
-                type: "streamlit:component",
-                value: data
-            }, "*");
+            // 使用 stBridges.send 发送数据
+            if (window.stBridges) {
+                window.stBridges.send('map-bridge', data);
+            } else if (window.top && window.top.stBridges) {
+                window.top.stBridges.send('map-bridge', data);
+            }
         }
         console.log('🚁 地图已就绪');
     </script>
@@ -316,9 +330,5 @@ html_template = """
 
 html_code = html_template.replace("__INIT_DATA__", init_data_json)
 
-# 渲染地图，接收 JS 回传的数据
-returned_data = st.components.v1.html(html_code, height=700, scrolling=False)
-
-# 更新 map_data
-if returned_data is not None and isinstance(returned_data, dict):
-    st.session_state.map_data = returned_data
+# 使用 streamlit-bridge 的 html 组件渲染地图
+html(html_code, height=700)
