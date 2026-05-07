@@ -136,7 +136,6 @@ with tab1:
         st.session_state.drone_height = st.slider("飞行高度(m)", 0, 150, 50, key="drone_h")
         st.session_state.drone_safety_radius = st.slider("安全半径(m)", 1, 50, 15, key="safety_r")
         
-        # ✅ 【官方安全写法】key 绝对不与 session_state 同名
         selected_mode = st.radio(
             "绕飞模式", 
             ["向左绕飞", "向右绕飞", "最短弧线"], 
@@ -183,7 +182,7 @@ with tab1:
             location=center,
             zoom_start=19,
             tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
-            attr="Esri Satellite"
+            attr="Esri World Imagery"  # 修复：必须加版权说明
         )
 
         if st.session_state.point_a:
@@ -261,8 +260,13 @@ with tab2:
         st.subheader("🗺️ 实时地图")
         route = calculate_route()
         center = st.session_state.point_a or (32.2322, 118.7490)
-        m = folium.Map(location=center, zoom_start=19,
-                       tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}")
+        m = folium.Map(
+            location=center,
+            zoom_start=19,
+            tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+            attr="Esri World Imagery"  # 修复：必须加版权说明
+        )
+
         if st.session_state.point_a: folium.Marker(st.session_state.point_a, icon=folium.Icon(color="red")).add_to(m)
         if st.session_state.point_b: folium.Marker(st.session_state.point_b, icon=folium.Icon(color="green")).add_to(m)
         for obs in st.session_state.obstacles_all: folium.Polygon(obs, color="red", fill=True, fill_opacity=0.5).add_to(m)
