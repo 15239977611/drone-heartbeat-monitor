@@ -8,6 +8,7 @@ from shapely.geometry import Polygon, LineString, Point
 from shapely.ops import nearest_points
 from shapely.affinity import scale
 from pyproj import Transformer
+import pandas as pd
 
 # ===================== 坐标系转换（GCJ-02 ↔ WGS84）核心 =====================
 transformer_wgs84_to_gcj02 = Transformer.from_crs("EPSG:4326", "EPSG:4490", always_xy=True)
@@ -21,8 +22,8 @@ def gcj02_to_wgs84(lon, lat):
 
 # ===================== 初始化 =====================
 defaults = {
-    "point_a": None,
-    "point_b": None,
+    "point_a": (32.2330, 118.7490),
+    "point_b": (32.2340, 118.7500),
     "obstacles_all": [],
     "obstacles_height": [],
     "obstacle_names": [],
@@ -36,6 +37,11 @@ defaults = {
     "drawing_mode": False,
     "temp_points": [],
     "heartbeat_log": [],
+    "task_state": "已暂停",
+    "task_speed": 8.5,
+    "task_time": 0,
+    "task_distance": 0,
+    "task_battery": 96,
     "tab": "航线规划"
 }
 
@@ -111,8 +117,9 @@ def calculate_route():
 
 # ===================== 界面：多标签页 =====================
 st.set_page_config(layout="wide")
-tab1, tab2 = st.tabs(["✅ 航线规划", "📡 飞行监控（心跳包）"])
+tab1, tab2 = st.tabs(["✅ 航线规划", "🚁 飞行监控（心跳包+任务面板）"])
 
+# --------------------- 标签1：航线规划 ---------------------
 with tab1:
     st.title("📌 无人机航线规划系统（GCJ-02坐标系）")
     col_left, col_right = st.columns([1, 3])
@@ -142,9 +149,12 @@ with tab1:
                     st.session_state.flight_path = interpolate_path(route)
                     st.session_state.drone_pos = st.session_state.flight_path[0]
                     st.session_state.flight_idx = 0
+                    st.session_state.task_state = "执行中"
+                    st.session_state.task_time = 0
         with c2:
             if st.button("⏹️ 停止"):
                 st.session_state.drone_pos = None
+                st.session_state.task_state = "已暂停"
 
         st.subheader("🟥 障碍物圈选（记忆）")
         h = st.slider("障碍物高度(m)", 5, 150, 30)
@@ -170,8 +180,8 @@ with tab1:
         m = folium.Map(
             location=center,
             zoom_start=19,
-            tiles="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
-            attr="OpenStreetMap"
+            tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+            attr="Tiles © Esri — Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community"
         )
 
         if st.session_state.point_a:
@@ -191,7 +201,7 @@ with tab1:
             icon_html = f'<div style="transform:rotate({st.session_state.heading}deg);font-size:28px;">✈️</div>'
             folium.Marker((lat, lng), icon=folium.DivIcon(html=icon_html)).add_to(m)
 
-        map_out = st_folium(m, height=750, key="map", returned_objects=["last_clicked"])
+        map_out = st_folium(m, height=750, key="map1", returned_objects=["last_clicked"])
 
         # 圈选点采集
         if map_out and map_out.get("last_clicked"):
@@ -200,34 +210,164 @@ with tab1:
             if st.session_state.drawing_mode:
                 st.session_state.temp_points.append([lat, lng])
 
+# --------------------- 标签2：飞行监控（和参考模板完全对齐） ---------------------
 with tab2:
-    st.title("📡 飞行监控 & 心跳包")
-    st.subheader("实时无人机状态")
-    if st.session_state.drone_pos:
-        lat, lng = st.session_state.drone_pos
-        st.metric("当前位置", f"Lat:{lat:.5f} Lng:{lng:.5f}")
-        st.metric("飞行高度", f"{st.session_state.drone_height} m")
-        st.metric("安全半径", f"{st.session_state.drone_safety_radius} m")
-        st.metric("绕飞模式", st.session_state.avoid_mode)
-    else:
-        st.info("未起飞，无实时数据")
+    st.title("🚁 飞行实时画面 - 任务执行监控")
 
-    st.subheader("🧠 心跳包日志")
-    now = time.strftime("%H:%M:%S")
-    if st.session_state.drone_pos:
-        st.session_state.heartbeat_log.append(f"[{now}] 在线 | 位置有效")
-    else:
-        st.session_state.heartbeat_log.append(f"[{now}] 待机")
+    # 任务控制按钮
+    col_btn = st.columns([1, 1, 1, 1, 0.3])
+    with col_btn[0]:
+        if st.button("▶️ 开始任务", type="primary", use_container_width=True):
+            route = calculate_route()
+            if len(route) >= 2:
+                st.session_state.flight_path = interpolate_path(route)
+                st.session_state.drone_pos = st.session_state.flight_path[0]
+                st.session_state.flight_idx = 0
+                st.session_state.task_state = "执行中"
+                st.session_state.task_time = 0
+    with col_btn[1]:
+        if st.button("⏸️ 暂停", use_container_width=True):
+            st.session_state.task_state = "已暂停"
+    with col_btn[2]:
+        if st.button("⏹️ 停止", use_container_width=True):
+            st.session_state.drone_pos = None
+            st.session_state.task_state = "已暂停"
+    with col_btn[3]:
+        if st.button("🔄 重置", use_container_width=True):
+            st.session_state.flight_idx = 0
+            st.session_state.drone_pos = None
+            st.session_state.task_state = "已暂停"
+            st.session_state.task_time = 0
+    with col_btn[4]:
+        st.caption(f"🟡 {st.session_state.task_state}")
 
-    for line in st.session_state.heartbeat_log[-15:]:
-        st.text(line)
+    st.divider()
+
+    # 任务状态面板（和模板一致）
+    col_status = st.columns(6)
+    with col_status[0]:
+        st.metric("当前航点", f"{st.session_state.flight_idx}/{len(st.session_state.flight_path) if st.session_state.flight_path else 0}")
+    with col_status[1]:
+        st.metric("飞行速度", f"{st.session_state.task_speed} m/s")
+    with col_status[2]:
+        st.metric("已用时间", f"{st.session_state.task_time//60:02d}:{st.session_state.task_time%60:02d}")
+    with col_status[3]:
+        remaining = max(0, len(st.session_state.flight_path) - st.session_state.flight_idx) if st.session_state.flight_path else 0
+        st.metric("剩余距离", f"{remaining} m")
+    with col_status[4]:
+        st.metric("预计到达", "00:00")
+    with col_status[5]:
+        st.metric("电量模拟", f"{st.session_state.task_battery}%")
+
+    # 任务进度条
+    progress = min(100, int(100 * st.session_state.flight_idx / len(st.session_state.flight_path)) if st.session_state.flight_path else 0)
+    st.progress(progress, text=f"任务进度: {progress}%")
+    st.divider()
+
+    # 实时地图 + 通信链路面板
+    col_map, col_comm = st.columns([2, 1])
+    with col_map:
+        st.subheader("🗺️ 实时飞行地图")
+        route = calculate_route()
+        center = st.session_state.point_a or (32.2330, 118.7490)
+        m = folium.Map(
+            location=center,
+            zoom_start=19,
+            tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+            attr="Tiles © Esri"
+        )
+
+        if st.session_state.point_a:
+            folium.Marker(st.session_state.point_a, icon=folium.Icon(color="green"), tooltip="A点").add_to(m)
+        if st.session_state.point_b:
+            folium.Marker(st.session_state.point_b, icon=folium.Icon(color="red"), tooltip="B点").add_to(m)
+
+        for obs in st.session_state.obstacles_all:
+            if len(obs) > 2:
+                folium.Polygon(obs, color="red", fill=True, fill_opacity=0.5).add_to(m)
+
+        if len(route) >= 2:
+            folium.PolyLine(route, color="green", weight=4).add_to(m)
+
+        if st.session_state.drone_pos:
+            lat, lng = st.session_state.drone_pos
+            icon_html = f'<div style="transform:rotate({st.session_state.heading}deg);font-size:28px;">✈️</div>'
+            folium.Marker((lat, lng), icon=folium.DivIcon(html=icon_html)).add_to(m)
+
+        st_folium(m, height=600, key="map2")
+
+    with col_comm:
+        st.subheader("📡 通信链路拓扑与数据流")
+        st.markdown("""
+        <div style="display:flex;justify-content:space-around;margin-bottom:20px;">
+            <span>✅ GCS 在线</span>
+            <span>✅ OBC 在线</span>
+            <span>✅ FCU 在线</span>
+        </div>
+        """, unsafe_allow_html=True)
+
+        # 链路拓扑卡片（和模板一致）
+        col_gcs, col_obc, col_fcu = st.columns(3)
+        with col_gcs:
+            st.markdown("""
+            <div style="border:2px solid #4A90E2;border-radius:8px;padding:10px;text-align:center;">
+                <div style="font-size:24px;">🖥️</div>
+                <div><b>GCS</b></div>
+                <div style="font-size:12px;">地面站</div>
+                <div style="font-size:10px;color:gray;">192.168.1.100</div>
+            </div>
+            """, unsafe_allow_html=True)
+        with col_obc:
+            st.markdown("""
+            <div style="border:2px solid #F5A623;border-radius:8px;padding:10px;text-align:center;">
+                <div style="font-size:24px;">🧠</div>
+                <div><b>OBC</b></div>
+                <div style="font-size:12px;">机载计算机</div>
+                <div style="font-size:10px;color:gray;">Raspberry Pi 4</div>
+            </div>
+            """, unsafe_allow_html=True)
+        with col_fcu:
+            st.markdown("""
+            <div style="border:2px solid #BD10E0;border-radius:8px;padding:10px;text-align:center;">
+                <div style="font-size:24px;">⚙️</div>
+                <div><b>FCU</b></div>
+                <div style="font-size:12px;">飞控</div>
+                <div style="font-size:10px;color:gray;">PX4 / ArduPilot</div>
+            </div>
+            """, unsafe_allow_html=True)
+
+        # 链路状态
+        st.markdown("""
+        <div style="display:flex;justify-content:space-around;margin:10px 0;">
+            <div>⬆️⬇️ UDP:14550</div>
+            <div>⬆️⬇️ MAVLink</div>
+        </div>
+        <div style="display:flex;justify-content:space-around;margin-bottom:10px;">
+            <div style="color:green;">🟢 已连接</div>
+            <div style="color:green;">🟢 已连接</div>
+        </div>
+        <div style="background:#f0f0f0;padding:8px;border-radius:4px;font-size:12px;">
+            链路统计：GCS↔OBC:正常 | OBC↔FCU:正常 | 延迟:~25ms | 丢包率:0.1%
+        </div>
+        """, unsafe_allow_html=True)
+
+        # 心跳包日志（按老师要求放在飞行监控界面）
+        st.subheader("🧠 心跳包日志")
+        now = time.strftime("%H:%M:%S")
+        if st.session_state.drone_pos:
+            st.session_state.heartbeat_log.append(f"[{now}] 在线 | 位置有效")
+        else:
+            st.session_state.heartbeat_log.append(f"[{now}] 待机")
+        for line in st.session_state.heartbeat_log[-15:]:
+            st.text(line)
 
 # ===================== 飞行循环 =====================
-if st.session_state.drone_pos and st.session_state.flight_path:
+if st.session_state.task_state == "执行中" and st.session_state.drone_pos and st.session_state.flight_path:
     total = len(st.session_state.flight_path)
     if st.session_state.flight_idx < total - 1:
         st.session_state.flight_idx += 1
         st.session_state.drone_pos = st.session_state.flight_path[st.session_state.flight_idx]
+        st.session_state.task_time += 1
         if st.session_state.flight_idx + 1 < total:
             p1 = st.session_state.flight_path[st.session_state.flight_idx]
             p2 = st.session_state.flight_path[st.session_state.flight_idx + 1]
@@ -235,4 +375,5 @@ if st.session_state.drone_pos and st.session_state.flight_path:
         time.sleep(0.08)
         st.rerun()
     else:
-        st.success("✅ 已到达目的地")
+        st.session_state.task_state = "已完成"
+        st.success("✅ 已到达目的地，任务完成！")
