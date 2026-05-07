@@ -149,7 +149,7 @@ html_template = """
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <style>
         html, body { height: 100%; margin: 0; padding: 0; }
-        #map { height: 100%; width: 100%; }
+        #map { height: 700px; width: 100%; }
         .btn-container {
             position: absolute; top: 10px; left: 10px; z-index: 1000;
             display: flex; gap: 5px; flex-wrap: wrap;
@@ -331,4 +331,4 @@ html_template = """
 html_code = html_template.replace("__INIT_DATA__", init_data_json)
 
 # 使用 streamlit-bridge 的 html 组件渲染地图
-html(html_code, height=700)
+html(html_code)
