@@ -20,14 +20,14 @@ def wgs84_to_gcj02(lon, lat):
 def gcj02_to_wgs84(lon, lat):
     return transformer_gcj02_to_wgs84.transform(lon, lat)
 
-# ===================== 初始化 =====================
+# ===================== 初始化（用你提供的真实坐标） =====================
 defaults = {
-    "point_a": (32.2330, 118.7490),
-    "point_b": (32.2340, 118.7500),
+    "point_a": (32.2322, 118.7490),  # 你给的A点
+    "point_b": (32.2343, 118.7490),  # 你给的B点
     "obstacles_all": [],
     "obstacles_height": [],
     "obstacle_names": [],
-    "drone_height": 8,
+    "drone_height": 50,              # 你截图里的50m
     "drone_safety_radius": 15,
     "avoid_mode": "向左绕飞",
     "flight_path": [],
@@ -119,24 +119,26 @@ def calculate_route():
 st.set_page_config(layout="wide")
 tab1, tab2 = st.tabs(["✅ 航线规划", "🚁 飞行监控（心跳包+任务面板）"])
 
-# --------------------- 标签1：航线规划 ---------------------
+# --------------------- 标签1：航线规划（和你截图的控制面板一致） ---------------------
 with tab1:
     st.title("📌 无人机航线规划系统（GCJ-02坐标系）")
     col_left, col_right = st.columns([1, 3])
 
     with col_left:
-        st.subheader("📍 坐标输入（校园内）")
-        a_lat = st.number_input("A点纬度", value=32.2330, format="%.6f")
-        a_lng = st.number_input("A点经度", value=118.7490, format="%.6f")
-        b_lat = st.number_input("B点纬度", value=32.2340, format="%.6f")
-        b_lng = st.number_input("B点经度", value=118.7500, format="%.6f")
-
-        if st.button("✅ 应用A/B点"):
+        st.subheader("📍 起点 A (GCJ-02)")
+        a_lat = st.number_input("纬度", value=32.2322, format="%.4f")
+        a_lng = st.number_input("经度", value=118.7490, format="%.3f")
+        if st.button("✅ 设置A点"):
             st.session_state.point_a = (a_lat, a_lng)
+
+        st.subheader("📍 终点 B (GCJ-02)")
+        b_lat = st.number_input("纬度", value=32.2343, format="%.4f")
+        b_lng = st.number_input("经度", value=118.7490, format="%.3f")
+        if st.button("✅ 设置B点"):
             st.session_state.point_b = (b_lat, b_lng)
 
         st.subheader("🛠️ 飞行参数")
-        st.session_state.drone_height = st.slider("无人机高度(m)", 0, 150, 8)
+        st.session_state.drone_height = st.slider("设定飞行高度(m)", 0, 150, 50)
         st.session_state.drone_safety_radius = st.slider("安全半径(m)", 1, 50, 15)
         st.session_state.avoid_mode = st.radio("绕飞模式", ["向左绕飞", "向右绕飞", "最短弧线"])
 
@@ -174,9 +176,9 @@ with tab1:
             st.session_state.obstacle_names = []
 
     with col_right:
-        st.caption("🗺️ 卫星地图（OpenStreet + GCJ-02），放大后为2D便于圈选")
+        st.caption("🗺️ 卫星地图（Esri 影像，GCJ-02适配），放大后为2D便于圈选")
         route = calculate_route()
-        center = st.session_state.point_a or (32.2330, 118.7490)
+        center = st.session_state.point_a or (32.2322, 118.7490)
         m = folium.Map(
             location=center,
             zoom_start=19,
@@ -185,9 +187,9 @@ with tab1:
         )
 
         if st.session_state.point_a:
-            folium.Marker(st.session_state.point_a, icon=folium.Icon(color="green"), tooltip="A点").add_to(m)
+            folium.Marker(st.session_state.point_a, icon=folium.Icon(color="red", icon="white"), tooltip="起点A").add_to(m)
         if st.session_state.point_b:
-            folium.Marker(st.session_state.point_b, icon=folium.Icon(color="red"), tooltip="B点").add_to(m)
+            folium.Marker(st.session_state.point_b, icon=folium.Icon(color="green", icon="play"), tooltip="终点B").add_to(m)
 
         for obs in st.session_state.obstacles_all:
             if len(obs) > 2:
@@ -269,7 +271,7 @@ with tab2:
     with col_map:
         st.subheader("🗺️ 实时飞行地图")
         route = calculate_route()
-        center = st.session_state.point_a or (32.2330, 118.7490)
+        center = st.session_state.point_a or (32.2322, 118.7490)
         m = folium.Map(
             location=center,
             zoom_start=19,
@@ -278,9 +280,9 @@ with tab2:
         )
 
         if st.session_state.point_a:
-            folium.Marker(st.session_state.point_a, icon=folium.Icon(color="green"), tooltip="A点").add_to(m)
+            folium.Marker(st.session_state.point_a, icon=folium.Icon(color="red", icon="white"), tooltip="起点A").add_to(m)
         if st.session_state.point_b:
-            folium.Marker(st.session_state.point_b, icon=folium.Icon(color="red"), tooltip="B点").add_to(m)
+            folium.Marker(st.session_state.point_b, icon=folium.Icon(color="green", icon="play"), tooltip="终点B").add_to(m)
 
         for obs in st.session_state.obstacles_all:
             if len(obs) > 2:
