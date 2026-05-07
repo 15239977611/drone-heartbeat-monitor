@@ -24,7 +24,6 @@ defaults = {
     "point_b": (32.2343, 118.7490),
     "obstacles_all": [],
     "obstacles_height": [],
-    "obstacle_names": [],
     "drone_height": 50,
     "drone_safety_radius": 15,
     "avoid_mode": "向左绕飞",
@@ -137,8 +136,14 @@ with tab1:
         st.session_state.drone_height = st.slider("飞行高度(m)", 0, 150, 50, key="drone_h")
         st.session_state.drone_safety_radius = st.slider("安全半径(m)", 1, 50, 15, key="safety_r")
         
-        avoid_mode = st.radio("绕飞模式", ["向左绕飞", "向右绕飞", "最短弧线"], key="avoid_mode")
-        st.session_state.avoid_mode = avoid_mode
+        # ✅ 【官方安全写法】key 绝对不与 session_state 同名
+        selected_mode = st.radio(
+            "绕飞模式", 
+            ["向左绕飞", "向右绕飞", "最短弧线"], 
+            key="avoid_selector",
+            index=["向左绕飞", "向右绕飞", "最短弧线"].index(st.session_state.avoid_mode)
+        )
+        st.session_state.avoid_mode = selected_mode
 
         st.subheader("✈️ 飞行控制")
         c1, c2 = st.columns(2)
