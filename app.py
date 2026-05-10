@@ -12,7 +12,7 @@ from shapely.ops import unary_union
 
 # ===================== 核心配置 =====================
 # 学校区域经纬度范围（南京某校园，可自行调整）
-SCHOOL_LAT_RANGE = (32.2300, 32.2380)
+SCHOOL_LAT_RANGE = (32.2300, 32.2390)
 SCHOOL_LNG_RANGE = (118.7450, 118.7550)
 # GCJ-02与WGS84坐标系转换参数
 PI = math.pi
@@ -227,7 +227,7 @@ if page == "航线规划":
             "纬度", 
             min_value=SCHOOL_LAT_RANGE[0], 
             max_value=SCHOOL_LAT_RANGE[1], 
-            value=32.2322, 
+            value=32.234111, 
             step=0.0001,
             key="a_lat"
         )
@@ -235,7 +235,7 @@ if page == "航线规划":
             "经度", 
             min_value=SCHOOL_LNG_RANGE[0], 
             max_value=SCHOOL_LNG_RANGE[1], 
-            value=118.7490, 
+            value=118.749428, 
             step=0.0001,
             key="a_lng"
         )
@@ -248,8 +248,8 @@ if page == "航线规划":
         b_lat = st.number_input(
             "纬度", 
             min_value=SCHOOL_LAT_RANGE[0], 
-            max_value=SCHOOL_LAT_RANGE[1], 
-            value=32.2343, 
+            max_value=SCHOOL_LAT_ANGE[1], 
+            value=32.234111, 
             step=0.0001,
             key="b_lat"
         )
@@ -257,7 +257,7 @@ if page == "航线规划":
             "经度", 
             min_value=SCHOOL_LNG_RANGE[0], 
             max_value=SCHOOL_LNG_RANGE[1], 
-            value=118.7490, 
+            value=118.749428, 
             step=0.0001,
             key="b_lng"
         )
@@ -656,12 +656,7 @@ if st.session_state.is_flying and st.session_state.flight_path:
         # 平滑更新位置
         st.session_state.flight_idx += 1
         st.session_state.drone_pos = st.session_state.flight_path[st.session_state.flight_idx]
-        
-        # 控制飞行速度（调整sleep时间）
-        time.sleep(0.05)
-        
-        # 无闪烁刷新
-        st.rerun()
     else:
         st.session_state.is_flying = False
         st.success("✅ 无人机已到达目的地！任务完成！")
+st.empty()
