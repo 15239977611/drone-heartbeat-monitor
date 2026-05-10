@@ -248,7 +248,7 @@ if page == "航线规划":
         b_lat = st.number_input(
             "纬度", 
             min_value=SCHOOL_LAT_RANGE[0], 
-            max_value=SCHOOL_LAT_ANGE[1], 
+            max_value=SCHOOL_LAT_RANGE[1], 
             value=32.234111, 
             step=0.0001,
             key="b_lat"
