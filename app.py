@@ -227,7 +227,7 @@ if page == "航线规划":
             "纬度", 
             min_value=SCHOOL_LAT_RANGE[0], 
             max_value=SCHOOL_LAT_RANGE[1], 
-            value=32.234111, 
+            value=32.2360, 
             step=0.0001,
             key="a_lat"
         )
@@ -249,7 +249,7 @@ if page == "航线规划":
             "纬度", 
             min_value=SCHOOL_LAT_RANGE[0], 
             max_value=SCHOOL_LAT_RANGE[1], 
-            value=32.234111, 
+            value=32.2330, 
             step=0.0001,
             key="b_lat"
         )
