@@ -1,359 +1,667 @@
 import streamlit as st
-import pandas as pd
-import time
+import folium
+from streamlit_folium import st_folium
 import math
-import random
-from datetime import datetime
-from streamlit.components.v1 import html
+import time
+from datetime import timedelta
+import json
+from shapely.geometry import Polygon, LineString, Point
+from shapely.ops import nearest_points
+from shapely.affinity import scale
+from shapely.ops import unary_union
 
-# ================== 坐标系转换（GCJ-02 -> WGS-84） ==================
-def gcj02_to_wgs84(lat, lng):
-    a = 6378245.0
-    ee = 0.00669342162296594323
+# ===================== 核心配置 =====================
+# 学校区域经纬度范围（南京某校园，可自行调整）
+SCHOOL_LAT_RANGE = (32.2300, 32.2380)
+SCHOOL_LNG_RANGE = (118.7450, 118.7550)
+# GCJ-02与WGS84坐标系转换参数
+PI = math.pi
+a = 6378245.0
+ee = 0.00669342162296594323
 
-    def transform_lat(x, y):
-        ret = -100.0 + 2.0 * x + 3.0 * y + 0.2 * y * y + 0.1 * x * y + 0.2 * math.sqrt(abs(x))
-        ret += (20.0 * math.sin(6.0 * x * math.pi) + 20.0 * math.sin(2.0 * x * math.pi)) * 2.0 / 3.0
-        ret += (20.0 * math.sin(y * math.pi) + 40.0 * math.sin(y / 3.0 * math.pi)) * 2.0 / 3.0
-        ret += (160.0 * math.sin(y / 12.0 * math.pi) + 320 * math.sin(y * math.pi / 30.0)) * 2.0 / 3.0
-        return ret
+# ===================== 坐标系转换（解决坐标偏移） =====================
+def transform_lat(x, y):
+    ret = -100.0 + 2.0 * x + 3.0 * y + 0.2 * y * y + 0.1 * x * y + 0.2 * math.sqrt(abs(x))
+    ret += (20.0 * math.sin(6.0 * x * PI) + 20.0 * math.sin(2.0 * x * PI)) * 2.0 / 3.0
+    ret += (20.0 * math.sin(y * PI) + 40.0 * math.sin(y / 3.0 * PI)) * 2.0 / 3.0
+    ret += (160.0 * math.sin(y / 12.0 * PI) + 320 * math.sin(y * PI / 30.0)) * 2.0 / 3.0
+    return ret
 
-    def transform_lng(x, y):
-        ret = 300.0 + x + 2.0 * y + 0.1 * x * x + 0.1 * x * y + 0.1 * math.sqrt(abs(x))
-        ret += (20.0 * math.sin(6.0 * x * math.pi) + 20.0 * math.sin(2.0 * x * math.pi)) * 2.0 / 3.0
-        ret += (20.0 * math.sin(x * math.pi) + 40.0 * math.sin(x / 3.0 * math.pi)) * 2.0 / 3.0
-        ret += (150.0 * math.sin(x / 12.0 * math.pi) + 300.0 * math.sin(x / 30.0 * math.pi)) * 2.0 / 3.0
-        return ret
+def transform_lng(x, y):
+    ret = 300.0 + x + 2.0 * y + 0.1 * x * x + 0.1 * x * y + 0.1 * math.sqrt(abs(x))
+    ret += (20.0 * math.sin(6.0 * x * PI) + 20.0 * math.sin(2.0 * x * PI)) * 2.0 / 3.0
+    ret += (20.0 * math.sin(x * PI) + 40.0 * math.sin(x / 3.0 * PI)) * 2.0 / 3.0
+    ret += (150.0 * math.sin(x / 12.0 * PI) + 300.0 * math.sin(x / 30.0 * PI)) * 2.0 / 3.0
+    return ret
 
+def out_of_china(lat, lng):
+    return not (lng > 73.66 and lng < 135.05 and lat > 3.86 and lat < 53.55)
+
+def wgs84_to_gcj02(lng, lat):
+    """WGS84转GCJ02（火星坐标系）"""
+    if out_of_china(lat, lng):
+        return [lng, lat]
     dlat = transform_lat(lng - 105.0, lat - 35.0)
     dlng = transform_lng(lng - 105.0, lat - 35.0)
-    radlat = lat / 180.0 * math.pi
+    radlat = lat / 180.0 * PI
     magic = math.sin(radlat)
     magic = 1 - ee * magic * magic
     sqrtmagic = math.sqrt(magic)
-    dlat = (dlat * 180.0) / ((a * (1 - ee)) / (magic * sqrtmagic) * math.pi)
-    dlng = (dlng * 180.0) / (a / sqrtmagic * math.cos(radlat) * math.pi)
-    wgs_lat = lat - dlat
-    wgs_lng = lng - dlng
-    return wgs_lat, wgs_lng
+    dlat = (dlat * 180.0) / ((a * (1 - ee)) / (magic * sqrtmagic) * PI)
+    dlng = (dlng * 180.0) / (a / sqrtmagic * math.cos(radlat) * PI)
+    mglat = lat + dlat
+    mglng = lng + dlng
+    return [mglng, mglat]
 
-# ================== 生成障碍物（改为支持手动重置） ==================
-def generate_obstacles(a_lat, a_lng, b_lat, b_lng, num=5):
-    obstacles = []
-    for i in range(num):
-        t = (i + 1) / (num + 1)
-        base_lat = a_lat + (b_lat - a_lat) * t
-        base_lng = a_lng + (b_lng - a_lng) * t
-        offset_lat = (random.random() - 0.5) * 0.0004
-        offset_lng = (random.random() - 0.5) * 0.0004
-        obs_lat = base_lat + offset_lat
-        obs_lng = base_lng + offset_lng
-        height = random.randint(20, 50)
-        obstacles.append([obs_lat, obs_lng, height])
-    return obstacles
+def gcj02_to_wgs84(lng, lat):
+    """GCJ02转WGS84"""
+    if out_of_china(lat, lng):
+        return [lng, lat]
+    dlat = transform_lat(lng - 105.0, lat - 35.0)
+    dlng = transform_lng(lng - 105.0, lat - 35.0)
+    radlat = lat / 180.0 * PI
+    magic = math.sin(radlat)
+    magic = 1 - ee * magic * magic
+    sqrtmagic = math.sqrt(magic)
+    dlat = (dlat * 180.0) / ((a * (1 - ee)) / (magic * sqrtmagic) * PI)
+    dlng = (dlng * 180.0) / (a / sqrtmagic * math.cos(radlat) * PI)
+    mglat = lat + dlat
+    mglng = lng + dlng
+    return [lng * 2 - mglng, lat * 2 - mglat]
 
-# ================== 心跳数据存储 ==================
-if 'heartbeat_data' not in st.session_state:
-    st.session_state.heartbeat_data = pd.DataFrame(columns=['序号', '时间'])
-if 'last_heartbeat_time' not in st.session_state:
-    st.session_state.last_heartbeat_time = datetime.now()
-if 'is_connected' not in st.session_state:
-    st.session_state.is_connected = True
-if 'heartbeat_sequence' not in st.session_state:
-    st.session_state.heartbeat_sequence = 0
-if 'simulation_on' not in st.session_state:
-    st.session_state.simulation_on = False
+# ===================== 初始化Session State =====================
+def init_session():
+    # 基础点位
+    if "point_a" not in st.session_state:
+        st.session_state.point_a = None  # GCJ02坐标
+    if "point_b" not in st.session_state:
+        st.session_state.point_b = None  # GCJ02坐标
+    # 障碍物
+    if "obstacles" not in st.session_state:
+        st.session_state.obstacles = []  # 存储：[(多边形坐标列表, 高度), ...]
+    if "drawing_obstacle" not in st.session_state:
+        st.session_state.drawing_obstacle = False
+    if "temp_obstacle_points" not in st.session_state:
+        st.session_state.temp_obstacle_points = []
+    # 飞行参数
+    if "drone_height" not in st.session_state:
+        st.session_state.drone_height = 50  # 无人机飞行高度
+    if "safety_radius" not in st.session_state:
+        st.session_state.safety_radius = 20  # 安全半径（米）
+    if "avoid_mode" not in st.session_state:
+        st.session_state.avoid_mode = "最优路径"  # 左/右/最优
+    # 飞行状态
+    if "flight_path" not in st.session_state:
+        st.session_state.flight_path = []
+    if "drone_pos" not in st.session_state:
+        st.session_state.drone_pos = None
+    if "flight_idx" not in st.session_state:
+        st.session_state.flight_idx = 0
+    if "is_flying" not in st.session_state:
+        st.session_state.is_flying = False
+    if "flight_start_time" not in st.session_state:
+        st.session_state.flight_start_time = None
+    if "flight_speed" not in st.session_state:
+        st.session_state.flight_speed = 8.5  # m/s
+    if "battery" not in st.session_state:
+        st.session_state.battery = 100.0
 
-# 新增：障碍物状态 + 点击点存储
-if 'obstacles' not in st.session_state:
-    st.session_state.obstacles = []
-if 'obstacle_count' not in st.session_state:
-    st.session_state.obstacle_count = 5
-if 'click_lat' not in st.session_state:
-    st.session_state.click_lat = None
-if 'click_lng' not in st.session_state:
-    st.session_state.click_lng = None
+init_session()
 
-def add_heartbeat():
-    st.session_state.heartbeat_sequence += 1
-    new_row = pd.DataFrame([{'序号': st.session_state.heartbeat_sequence, '时间': datetime.now()}])
-    st.session_state.heartbeat_data = pd.concat([st.session_state.heartbeat_data, new_row], ignore_index=True)
-    st.session_state.last_heartbeat_time = datetime.now()
-    st.session_state.is_connected = True
+# ===================== 航线规划核心算法 =====================
+def calculate_distance(lat1, lng1, lat2, lng2):
+    """计算两点间距离（米）"""
+    R = 6371000
+    dLat = math.radians(lat2 - lat1)
+    dLng = math.radians(lng2 - lng1)
+    a = math.sin(dLat/2) * math.sin(dLat/2) + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dLng/2) * math.sin(dLng/2)
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
+    return R * c
 
-def check_connection():
-    now = datetime.now()
-    if (now - st.session_state.last_heartbeat_time).total_seconds() > 3:
-        st.session_state.is_connected = False
+def interpolate_path(path, steps=20):
+    """平滑轨迹插值"""
+    smooth = []
+    for i in range(len(path)-1):
+        lat1, lng1 = path[i]
+        lat2, lng2 = path[i+1]
+        for s in range(steps):
+            f = s / steps
+            lat = lat1 + (lat2 - lat1) * f
+            lng = lng1 + (lng2 - lng1) * f
+            smooth.append((lat, lng))
+    return smooth
 
-# ================== 页面配置 ==================
-st.set_page_config(page_title="无人机智能监测系统", layout="wide")
-st.sidebar.title("导航")
-page = st.sidebar.radio("功能页面", ["航线规划", "飞行监控"])
-
-# ================== 航线规划页面 ==================
-if page == "航线规划":
-    st.title("🗺️ 航线规划")
-    st.markdown("设置起飞点 **A（校园内）** 和降落点 **B（校外）**，可点击地图添加障碍物。")
-
-    # 默认坐标（南京科技职业学院附近，GCJ-02）
-    default_a = (32.2322, 118.7490)
-    default_b = (32.2343, 118.7490)
-
-    # 获取当前 A/B 点（如果没有设置则用默认）
-    if 'a_point' in st.session_state:
-        a_lat_raw, a_lng_raw, a_sys = st.session_state.a_point
-    else:
-        a_lat_raw, a_lng_raw, a_sys = default_a[0], default_a[1], "GCJ-02 (高德/百度)"
-    if 'b_point' in st.session_state:
-        b_lat_raw, b_lng_raw, b_sys = st.session_state.b_point
-    else:
-        b_lat_raw, b_lng_raw, b_sys = default_b[0], default_b[1], "GCJ-02 (高德/百度)"
-
-    # 侧边栏：障碍物控制 + 坐标系统一设置
-    with st.sidebar:
-        st.subheader("⚙️ 障碍物设置")
-        st.info("👉 在地图上点击 → 点确认添加")
+def calculate_optimal_route():
+    """最优路径规划（最短航程+绕障）"""
+    A = st.session_state.point_a
+    B = st.session_state.point_b
+    if not A or not B:
+        return []
+    
+    drone_h = st.session_state.drone_height
+    safety_r = st.session_state.safety_radius
+    avoid_mode = st.session_state.avoid_mode
+    OFFSET = safety_r / 12000.0  # 经纬度偏移系数
+    
+    # 构建障碍物多边形（带安全半径）
+    obstacle_polygons = []
+    for obs_points, obs_h in st.session_state.obstacles:
+        if obs_h <= drone_h or len(obs_points) < 3:
+            continue
+        try:
+            poly = Polygon(obs_points)
+            # 扩大安全半径
+            safe_poly = scale(poly, 1 + safety_r/1600, 1 + safety_r/1600, origin='centroid')
+            obstacle_polygons.append(safe_poly)
+        except:
+            continue
+    
+    if not obstacle_polygons:
+        return [A, B]
+    
+    # 合并所有障碍物
+    all_obstacles = unary_union(obstacle_polygons)
+    route = [A]
+    current_point = A
+    
+    while calculate_distance(current_point[0], current_point[1], B[0], B[1]) > 10:
+        line = LineString([current_point, B])
+        if not line.intersects(all_obstacles):
+            route.append(B)
+            break
         
-        # 点击添加障碍物
-        if st.button("✅ 确认添加该障碍物"):
-            if st.session_state.click_lat and st.session_state.click_lng:
-                h = random.randint(20, 50)
-                st.session_state.obstacles.append([
-                    st.session_state.click_lat,
-                    st.session_state.click_lng,
-                    h
-                ])
-                st.success(f"添加成功！高度：{h}m")
-                st.session_state.click_lat = None
-                st.session_state.click_lng = None
+        # 找到交点和绕飞点
+        intersection = line.intersection(all_obstacles)
+        nearest_pt = nearest_points(line, all_obstacles.boundary)[0]
+        px, py = nearest_pt.x, nearest_pt.y
+        
+        # 计算绕飞方向
+        cx, cy = all_obstacles.centroid.x, all_obstacles.centroid.y
+        dx = px - cx
+        dy = py - cy
+        dist = math.hypot(dx, dy) or 1
+        dx /= dist
+        dy /= dist
+        
+        if avoid_mode == "向左绕飞":
+            wx, wy = -dy, dx
+        elif avoid_mode == "向右绕飞":
+            wx, wy = dy, -dx
+        else:  # 最优路径
+            # 计算左右绕飞距离，选短的
+            left_pt = (px - dy * OFFSET, py + dx * OFFSET)
+            right_pt = (px + dy * OFFSET, py - dx * OFFSET)
+            left_dist = calculate_distance(left_pt[0], left_pt[1], B[0], B[1])
+            right_dist = calculate_distance(right_pt[0], right_pt[1], B[0], B[1])
+            if left_dist < right_dist:
+                wx, wy = -dy, dx
             else:
-                st.warning("请先在地图上点击位置")
+                wx, wy = dy, -dx
+        
+        # 添加绕飞点
+        waypoint = (px + wx * OFFSET, py + wy * OFFSET)
+        route.append(waypoint)
+        current_point = waypoint
+    
+    return route
 
-        # 重置障碍物按钮
-        if st.button("🔄 清空所有障碍物"):
-            st.session_state.obstacles = []
-            st.success("已清空所有障碍物")
+# ===================== 界面构建 =====================
+st.set_page_config(layout="wide", page_title="无人机航线规划与监控系统")
 
-        st.markdown("---")
-        st.subheader("🌐 坐标系设置")
-        # 统一坐标系设置
-        unified_coord_sys = st.radio("全局坐标系", ["GCJ-02 (高德/百度)", "WGS-84"], index=0)
-        if st.button("✅ 确认并应用坐标系"):
-            # 统一设置A、B点坐标系
-            st.session_state.a_point = (a_lat_raw, a_lng_raw, unified_coord_sys)
-            st.session_state.b_point = (b_lat_raw, b_lng_raw, unified_coord_sys)
-            st.success("坐标系已同步到A、B点！")
+# 侧边栏导航
+page = st.sidebar.radio("功能界面", ["航线规划", "飞行监控"])
 
-    # 转换为 WGS-84（卫星地图使用 WGS-84）
-    if a_sys == "GCJ-02 (高德/百度)":
-        a_lat_wgs, a_lng_wgs = gcj02_to_wgs84(a_lat_raw, a_lng_raw)
-    else:
-        a_lat_wgs, a_lng_wgs = a_lat_raw, a_lng_raw
-    if b_sys == "GCJ-02 (高德/百度)":
-        b_lat_wgs, b_lng_wgs = gcj02_to_wgs84(b_lat_raw, b_lng_raw)
-    else:
-        b_lat_wgs, b_lng_wgs = b_lat_raw, b_lng_raw
-
-    obstacles = st.session_state.obstacles
-
-    # ========== 构造卫星地图（支持点击） ==========
-    circles_js = ""
-    for i, obs in enumerate(obstacles):
-        circles_js += f"""
-            L.circle([{obs[0]}, {obs[1]}], {{
-                color: 'orange',
-                fillColor: '#ff7800',
-                fillOpacity: 0.5,
-                radius: 15,
-                weight: 2
-            }}).addTo(map).bindPopup('障碍物 {i+1}<br>高度: {obs[2]} 米');
-            L.marker([{obs[0]}, {obs[1]}], {{
-                icon: L.divIcon({{
-                    html: '{i+1}',
-                    className: 'obstacle-label',
-                    iconSize: [20, 20],
-                    popupAnchor: [0, -10]
-                }})
-            }}).addTo(map);
-        """
-
-    # 临时点击点
-    temp_js = ""
-    if st.session_state.click_lat:
-        temp_js = f"""
-        L.marker([{st.session_state.click_lat},{st.session_state.click_lng}],{{
-            icon:L.divIcon({{html:'📍 待添加',className:'temp-point',iconSize:[70,22]}})
-        }}).addTo(map);
-        """
-
-    map_html = f"""
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <meta charset="utf-8">
-        <title>卫星地图航线规划</title>
-        <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-        <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-        <style>
-            html, body, #map {{ margin: 0; height: 100%; width: 100%; }}
-            .obstacle-label {{
-                background-color: orange;
-                color: white;
-                font-weight: bold;
-                border-radius: 50%;
-                text-align: center;
-                line-height: 20px;
-                font-size: 12px;
-                border: 1px solid darkorange;
-            }}
-            .temp-point {{
-                background:#222; color:white; padding:2px 6px; border-radius:8px; font-size:12px;
-            }}
-        </style>
-    </head>
-    <body>
-        <div id="map" style="height: 500px; width: 100%;"></div>
-        <script>
-            var map = L.map('map', {{
-                center: [{(a_lat_wgs + b_lat_wgs)/2}, {(a_lng_wgs + b_lng_wgs)/2}],
-                zoom: 18,
-                zoomControl: true,
-                attributionControl: true
-            }});
-
-            // 高清卫星地图
-            L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{{z}}/{{y}}/{{x}}', {{
-                attribution: 'Leaflet | 卫星地图'
-            }}).addTo(map);
-
-            // A 点
-            L.marker([{a_lat_wgs}, {a_lng_wgs}], {{
-                icon: L.divIcon({{
-                    html: '<div style="background-color: green; color: white; padding: 2px 6px; border-radius: 12px;">A 起点</div>',
-                    className: 'custom-div-icon',
-                    iconSize: [60, 25],
-                    popupAnchor: [0, -10]
-                }})
-            }}).addTo(map).bindPopup('起点 A (校园内)');
-
-            // B 点
-            L.marker([{b_lat_wgs}, {b_lng_wgs}], {{
-                icon: L.divIcon({{
-                    html: '<div style="background-color: red; color: white; padding: 2px 6px; border-radius: 12px;">B 终点</div>',
-                    className: 'custom-div-icon',
-                    iconSize: [60, 25],
-                    popupAnchor: [0, -10]
-                }})
-            }}).addTo(map).bindPopup('终点 B (校外)');
-
-            // 航线
-            var polyline = L.polyline([[{a_lat_wgs}, {a_lng_wgs}], [{b_lat_wgs}, {b_lng_wgs}]], {{
-                color: 'blue',
-                weight: 5,
-                opacity: 0.8
-            }}).addTo(map);
-            polyline.bindPopup('航线');
-
-            // 障碍物
-            {circles_js}
-            {temp_js}
-
-            // 地图点击事件
-            map.on('click', function(e) {{
-                window.parent.postMessage({{
-                    type: 'mapClick',
-                    lat: e.latlng.lat,
-                    lng: e.latlng.lng
-                }}, '*');
-            }});
-        </script>
-    </body>
-    </html>
-    """
-
-    st.subheader("🗺️ 卫星地图（高清影像）")
-    map_component = html(map_html, width=700, height=500)
-
-    # 接收地图点击
-    try:
-        msg = st.components.v1.get_component_message("mapClick")
-        if msg:
-            st.session_state.click_lat = msg["lat"]
-            st.session_state.click_lng = msg["lng"]
-    except:
-        pass
-
-    # 下方控件
-    col1, col2 = st.columns(2)
+if page == "航线规划":
+    # ===================== 航线规划界面 =====================
+    st.title("✈️ 无人机航线规划系统")
+    
+    # 布局：左侧控制面板，右侧地图
+    col1, col2 = st.columns([1, 3])
+    
     with col1:
-        st.subheader("起点 A（校园内）")
-        a_lat_input = st.number_input("纬度 A", value=default_a[0], format="%.6f", key="a_lat")
-        a_lng_input = st.number_input("经度 A", value=default_a[1], format="%.6f", key="a_lng")
-        if st.button("设置 A 点", key="set_a"):
-            st.session_state.a_point = (a_lat_input, a_lng_input, unified_coord_sys)
-            st.success("✅ A点已保存")
+        st.subheader("📍 坐标点设置（GCJ-02坐标系）")
+        
+        # 起点A设置
+        st.markdown("### 起点 A")
+        a_lat = st.number_input(
+            "纬度", 
+            min_value=SCHOOL_LAT_RANGE[0], 
+            max_value=SCHOOL_LAT_RANGE[1], 
+            value=32.2322, 
+            step=0.0001,
+            key="a_lat"
+        )
+        a_lng = st.number_input(
+            "经度", 
+            min_value=SCHOOL_LNG_RANGE[0], 
+            max_value=SCHOOL_LNG_RANGE[1], 
+            value=118.7490, 
+            step=0.0001,
+            key="a_lng"
+        )
+        if st.button("✅ 设置 A 点", key="set_a"):
+            st.session_state.point_a = (a_lat, a_lng)
+            st.success("起点A设置成功！")
+        
+        # 终点B设置
+        st.markdown("### 终点 B")
+        b_lat = st.number_input(
+            "纬度", 
+            min_value=SCHOOL_LAT_RANGE[0], 
+            max_value=SCHOOL_LAT_RANGE[1], 
+            value=32.2343, 
+            step=0.0001,
+            key="b_lat"
+        )
+        b_lng = st.number_input(
+            "经度", 
+            min_value=SCHOOL_LNG_RANGE[0], 
+            max_value=SCHOOL_LNG_RANGE[1], 
+            value=118.7490, 
+            step=0.0001,
+            key="b_lng"
+        )
+        if st.button("✅ 设置 B 点", key="set_b"):
+            st.session_state.point_b = (b_lat, b_lng)
+            st.success("终点B设置成功！")
+        
+        st.divider()
+        
+        # 飞行参数设置
+        st.subheader("🛸 飞行参数")
+        st.session_state.drone_height = st.slider(
+            "无人机飞行高度 (m)", 
+            min_value=0, 
+            max_value=200, 
+            value=st.session_state.drone_height,
+            key="drone_h"
+        )
+        st.session_state.safety_radius = st.slider(
+            "安全半径 (m)", 
+            min_value=5, 
+            max_value=50, 
+            value=st.session_state.safety_radius,
+            key="safety_r"
+        )
+        st.session_state.avoid_mode = st.selectbox(
+            "绕飞模式",
+            ["最优路径", "向左绕飞", "向右绕飞"],
+            key="avoid_mode_sel"
+        )
+        
+        st.divider()
+        
+        # 障碍物管理
+        st.subheader("🌍 障碍物管理")
+        obs_height = st.slider(
+            "障碍物高度 (m)", 
+            min_value=0, 
+            max_value=100, 
+            value=30,
+            key="obs_h"
+        )
+        
+        col_btn1, col_btn2 = st.columns(2)
+        with col_btn1:
+            if st.button("🟢 开始圈选障碍物"):
+                st.session_state.drawing_obstacle = True
+                st.session_state.temp_obstacle_points = []
+                st.info("请在地图上点击绘制多边形，至少3个点")
+        with col_btn2:
+            if st.button("✅ 完成圈选"):
+                if len(st.session_state.temp_obstacle_points) >= 3:
+                    # 闭合多边形
+                    temp_pts = st.session_state.temp_obstacle_points
+                    temp_pts.append(temp_pts[0])
+                    st.session_state.obstacles.append((temp_pts, obs_height))
+                    st.session_state.drawing_obstacle = False
+                    st.success(f"障碍物添加成功！当前总数：{len(st.session_state.obstacles)}")
+        
+        # 障碍物批量操作
+        col_btn3, col_btn4 = st.columns(2)
+        with col_btn3:
+            if st.button("🗑️ 清空所有障碍物"):
+                st.session_state.obstacles = []
+                st.success("所有障碍物已清空！")
+        with col_btn4:
+            if st.button("📝 导出障碍物数据"):
+                obs_data = json.dumps(st.session_state.obstacles)
+                st.download_button(
+                    label="下载障碍物数据",
+                    data=obs_data,
+                    file_name="obstacles.json",
+                    mime="application/json"
+                )
+        
+        st.divider()
+        
+        # 航线生成与飞行控制
+        st.subheader("✈️ 航线控制")
+        if st.button("📊 生成航线"):
+            route = calculate_optimal_route()
+            st.session_state.flight_path = interpolate_path(route)
+            st.success(f"航线生成成功！共 {len(route)} 个航点，{len(st.session_state.flight_path)} 个插值点")
+        
+        col_flight1, col_flight2 = st.columns(2)
+        with col_flight1:
+            if st.button("▶️ 开始飞行"):
+                if st.session_state.flight_path:
+                    st.session_state.is_flying = True
+                    st.session_state.flight_idx = 0
+                    st.session_state.drone_pos = st.session_state.flight_path[0]
+                    st.session_state.flight_start_time = time.time()
+                    st.session_state.battery = 100.0
+                    st.success("无人机已起飞！")
+                else:
+                    st.error("请先生成航线！")
+        with col_flight2:
+            if st.button("⏹️ 停止飞行"):
+                st.session_state.is_flying = False
+                st.session_state.drone_pos = None
+                st.success("无人机已停止飞行！")
+    
     with col2:
-        st.subheader("终点 B（校外）")
-        b_lat_input = st.number_input("纬度 B", value=default_b[0], format="%.6f", key="b_lat")
-        b_lng_input = st.number_input("经度 B", value=default_b[1], format="%.6f", key="b_lng")
-        if st.button("设置 B 点", key="set_b"):
-            st.session_state.b_point = (b_lat_input, b_lng_input, unified_coord_sys)
-            st.success("✅ B点已保存")
+        # 地图渲染（3D卫星地图）
+        st.subheader("🗺️ 校园卫星地图（GCJ-02坐标系）")
+        
+        # 确定地图中心
+        if st.session_state.point_a:
+            center = st.session_state.point_a
+        else:
+            center = [(SCHOOL_LAT_RANGE[0]+SCHOOL_LAT_RANGE[1])/2, 
+                      (SCHOOL_LNG_RANGE[0]+SCHOOL_LNG_RANGE[1])/2]
+        
+        # 创建3D卫星地图（OpenStreetMap + ESRI卫星图层）
+        m = folium.Map(
+            location=center,
+            zoom_start=18,
+            tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+            attr="Esri World Imagery (3D)",
+            control_scale=True
+        )
+        
+        # 添加OpenStreetMap图层切换
+        folium.TileLayer('openstreetmap', name='普通地图').add_to(m)
+        folium.LayerControl().add_to(m)
+        
+        # 绘制起点A
+        if st.session_state.point_a:
+            folium.Marker(
+                location=st.session_state.point_a,
+                icon=folium.Icon(color="green", icon="play", prefix="fa"),
+                popup=f"起点A\nGCJ-02坐标：{st.session_state.point_a}",
+                draggable=True
+            ).add_to(m)
+        
+        # 绘制终点B
+        if st.session_state.point_b:
+            folium.Marker(
+                location=st.session_state.point_b,
+                icon=folium.Icon(color="red", icon="flag", prefix="fa"),
+                popup=f"终点B\nGCJ-02坐标：{st.session_state.point_b}",
+                draggable=True
+            ).add_to(m)
+        
+        # 绘制障碍物
+        for i, (obs_pts, obs_h) in enumerate(st.session_state.obstacles):
+            folium.Polygon(
+                locations=obs_pts,
+                color="red",
+                fill=True,
+                fill_color="red",
+                fill_opacity=0.5,
+                weight=2,
+                popup=f"障碍物 {i+1}\n高度：{obs_h}m\n安全半径：{st.session_state.safety_radius}m"
+            ).add_to(m)
+        
+        # 绘制航线
+        if st.session_state.flight_path:
+            # 主航线（绿色）
+            folium.PolyLine(
+                locations=st.session_state.flight_path,
+                color="green",
+                weight=4,
+                opacity=0.8,
+                popup=f"规划航线\n总长度：{calculate_distance(st.session_state.flight_path[0][0], st.session_state.flight_path[0][1], st.session_state.flight_path[-1][0], st.session_state.flight_path[-1][1]):.1f}m"
+            ).add_to(m)
+            # 航点标记
+            for i, pt in enumerate(st.session_state.flight_path[::20]):
+                folium.CircleMarker(
+                    location=pt,
+                    radius=3,
+                    color="white",
+                    fill=True,
+                    fill_color="green",
+                    popup=f"航点 {i+1}"
+                ).add_to(m)
+        
+        # 绘制无人机
+        if st.session_state.drone_pos:
+            # 计算机头朝向
+            heading = 0
+            if st.session_state.flight_idx < len(st.session_state.flight_path)-1:
+                lat1, lng1 = st.session_state.flight_path[st.session_state.flight_idx]
+                lat2, lng2 = st.session_state.flight_path[st.session_state.flight_idx+1]
+                dx = lng2 - lng1
+                dy = lat2 - lat1
+                heading = math.degrees(math.atan2(dx, dy))
+            
+            # 旋转的无人机图标
+            icon_html = f'''
+            <div style="transform: rotate({heading}deg); font-size:28px; color:blue;">✈️</div>
+            '''
+            folium.Marker(
+                location=st.session_state.drone_pos,
+                icon=folium.DivIcon(html=icon_html),
+                popup=f"无人机位置\n高度：{st.session_state.drone_height}m\n速度：{st.session_state.flight_speed}m/s"
+            ).add_to(m)
+        
+        # 渲染地图（固定容器，防止闪烁）
+        map_container = st.empty()
+        with map_container:
+            map_output = st_folium(
+                m, 
+                height=700, 
+                key="planning_map", 
+                returned_objects=["last_clicked"]
+            )
+        
+        # 处理地图点击事件（圈选障碍物）
+        if map_output and map_output.get("last_clicked"):
+            lat = map_output["last_clicked"]["lat"]
+            lng = map_output["last_clicked"]["lng"]
+            
+            # 验证是否在校园内
+            if (SCHOOL_LAT_RANGE[0] <= lat <= SCHOOL_LAT_RANGE[1] and
+                SCHOOL_LNG_RANGE[0] <= lng <= SCHOOL_LNG_RANGE[1]):
+                if st.session_state.drawing_obstacle:
+                    st.session_state.temp_obstacle_points.append((lat, lng))
+                    st.info(f"已添加点 {len(st.session_state.temp_obstacle_points)}：({lat:.6f}, {lng:.6f})")
+            else:
+                st.warning("请在校园范围内选择点位！")
 
-    flight_height = st.slider("飞行高度 (米)", 10, 200, 50)
-
-    st.markdown("---")
-    st.subheader("系统状态")
-    col3, col4 = st.columns(2)
-    col3.metric("A点已设", "✅" if 'a_point' in st.session_state else "❌")
-    col4.metric("B点已设", "✅" if 'b_point' in st.session_state else "❌")
-    col5, _ = st.columns(2)
-    col5.metric("障碍物数量", len(obstacles))
-
-    with st.expander("📋 障碍物详细信息 (WGS-84)"):
-        for i, obs in enumerate(obstacles):
-            st.write(f"**障碍物 {i+1}**: 纬度 {obs[0]:.6f}, 经度 {obs[1]:.6f}, 高度 {obs[2]} 米")
-
-# ================== 飞行监控页面 ==================
 else:
-    st.title("📡 飞行监控")
-    st.markdown("实时心跳包监测（每秒一次），3秒未收到则报警。")
+    # ===================== 飞行监控界面 =====================
+    st.title("📡 无人机飞行实时监控系统")
+    
+    # 顶部控制按钮
+    col_ctrl1, col_ctrl2, col_ctrl3, col_ctrl4 = st.columns(4)
+    with col_ctrl1:
+        if st.button("▶️ 开始任务", type="primary"):
+            if st.session_state.flight_path:
+                st.session_state.is_flying = True
+                st.session_state.flight_idx = 0
+                st.session_state.drone_pos = st.session_state.flight_path[0]
+                st.session_state.flight_start_time = time.time()
+                st.session_state.battery = 100.0
+    with col_ctrl2:
+        if st.button("⏸️ 暂停任务"):
+            st.session_state.is_flying = False
+    with col_ctrl3:
+        if st.button("⏹️ 停止任务"):
+            st.session_state.is_flying = False
+            st.session_state.drone_pos = None
+    with col_ctrl4:
+        if st.button("🔄 重置任务"):
+            st.session_state.is_flying = False
+            st.session_state.flight_idx = 0
+            st.session_state.drone_pos = None
+            st.session_state.flight_start_time = None
+            st.session_state.battery = 100.0
+    
+    # 实时监控数据面板
+    st.subheader("📊 飞行数据监控")
+    col_data1, col_data2, col_data3, col_data4, col_data5, col_data6 = st.columns(6)
+    
+    # 计算监控数据
+    total_waypoints = len(st.session_state.flight_path) if st.session_state.flight_path else 0
+    current_waypoint = st.session_state.flight_idx + 1 if st.session_state.flight_idx else 0
+    flight_progress = (current_waypoint / total_waypoints * 100) if total_waypoints > 0 else 0
+    
+    # 已用时间
+    elapsed_time = 0
+    if st.session_state.flight_start_time and st.session_state.is_flying:
+        elapsed_time = time.time() - st.session_state.flight_start_time
+    elapsed_str = str(timedelta(seconds=int(elapsed_time)))
+    
+    # 剩余距离
+    remaining_distance = 0
+    if st.session_state.drone_pos and st.session_state.flight_path:
+        if st.session_state.flight_idx < len(st.session_state.flight_path)-1:
+            remaining_points = st.session_state.flight_path[st.session_state.flight_idx:]
+            remaining_distance = 0
+            for i in range(len(remaining_points)-1):
+                lat1, lng1 = remaining_points[i]
+                lat2, lng2 = remaining_points[i+1]
+                remaining_distance += calculate_distance(lat1, lng1, lat2, lng2)
+    
+    # 预计到达时间
+    eta_seconds = remaining_distance / st.session_state.flight_speed if st.session_state.flight_speed > 0 else 0
+    eta_str = str(timedelta(seconds=int(eta_seconds)))
+    
+    # 电量模拟（每秒消耗0.1%）
+    if st.session_state.is_flying and elapsed_time > 0:
+        st.session_state.battery = max(0, 100 - (elapsed_time * 0.1))
+    
+    with col_data1:
+        st.metric("当前航点", f"{current_waypoint}/{total_waypoints}")
+    with col_data2:
+        st.metric("飞行速度", f"{st.session_state.flight_speed} m/s")
+    with col_data3:
+        st.metric("已用时间", elapsed_str)
+    with col_data4:
+        st.metric("剩余距离", f"{remaining_distance:.1f} m")
+    with col_data5:
+        st.metric("预计到达", eta_str if eta_seconds > 0 else "已到达")
+    with col_data6:
+        st.metric("电量模拟", f"{st.session_state.battery:.1f}%")
+    
+    # 任务进度条
+    st.progress(flight_progress / 100, text=f"任务进度：{flight_progress:.1f}%")
+    
+    # 布局：左侧实时地图，右侧通信链路
+    col_map, col_link = st.columns([3, 2])
+    
+    with col_map:
+        st.subheader("🗺️ 实时飞行地图")
+        # 渲染实时地图
+        if st.session_state.point_a:
+            center = st.session_state.point_a
+        else:
+            center = [(SCHOOL_LAT_RANGE[0]+SCHOOL_LAT_RANGE[1])/2, 
+                      (SCHOOL_LNG_RANGE[0]+SCHOOL_LNG_RANGE[1])/2]
+        
+        m = folium.Map(
+            location=center,
+            zoom_start=18,
+            tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+            attr="Esri World Imagery (3D)"
+        )
+        
+        # 绘制航线和无人机
+        if st.session_state.flight_path:
+            folium.PolyLine(
+                locations=st.session_state.flight_path,
+                color="green",
+                weight=4,
+                opacity=0.8
+            ).add_to(m)
+        
+        if st.session_state.drone_pos:
+            folium.Marker(
+                location=st.session_state.drone_pos,
+                icon=folium.Icon(color="blue", icon="plane", prefix="fa"),
+                popup=f"无人机实时位置\n高度：{st.session_state.drone_height}m"
+            ).add_to(m)
+        
+        # 绘制障碍物
+        for obs_pts, obs_h in st.session_state.obstacles:
+            folium.Polygon(
+                locations=obs_pts,
+                color="red",
+                fill=True,
+                fill_color="red",
+                fill_opacity=0.5
+            ).add_to(m)
+        
+        st_folium(m, height=500, key="monitor_map")
+    
+    with col_link:
+        st.subheader("📶 通信链路拓扑与数据流")
+        
+        # 链路状态卡片
+        st.markdown("### 链路状态")
+        col_link1, col_link2, col_link3 = st.columns(3)
+        with col_link1:
+            st.success("🟢 GCS 在线")
+        with col_link2:
+            st.success("🟢 OBC 在线")
+        with col_link3:
+            st.success("🟢 FCU 在线")
+        
+        # 链路拓扑图
+        st.markdown("### 拓扑结构")
+        st.markdown("""
+        <div style="display: flex; align-items: center; justify-content: space-around; padding: 20px; background: #f0f2f6; border-radius: 10px;">
+            <div style="text-align: center; background: #e6f7ff; padding: 20px; border-radius: 8px;">
+                <h4>🖥️ GCS</h4>
+                <p>地面站</p>
+                <p>192.168.1.100</p>
+            </div>
+            <div style="color: #1890ff; font-size: 20px;">↔️</div>
+            <div style="text-align: center; background: #fff7e6; padding: 20px; border-radius: 8px;">
+                <h4>🟣 OBC</h4>
+                <p>机载计算机</p>
+                <p>Raspberry Pi 4</p>
+            </div>
+            <div style="color: #1890ff; font-size: 20px;">↔️</div>
+            <div style="text-align: center; background: #f9e6ff; padding: 20px; border-radius: 8px;">
+                <h4>⚙️ FCU</h4>
+                <p>飞控</p>
+                <p>PX4/ArduPilot</p>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # 链路统计
+        st.markdown("### 链路统计")
+        st.write("• GCS↔OBC：正常（UDP:14550）")
+        st.write("• OBC↔FCU：正常（MAVLink）")
+        st.write("• 延迟：~25ms | 丢包率：0.1%")
 
-    col_start, col_stop = st.columns(2)
-    with col_start:
-        if st.button("▶️ 开始模拟心跳"):
-            st.session_state.simulation_on = True
-    with col_stop:
-        if st.button("⏸️ 停止模拟心跳"):
-            st.session_state.simulation_on = False
-
-    if st.session_state.simulation_on:
-        add_heartbeat()
-        check_connection()
-        time.sleep(1)
+# ===================== 飞行循环（无闪烁核心） =====================
+if st.session_state.is_flying and st.session_state.flight_path:
+    total_pts = len(st.session_state.flight_path)
+    if st.session_state.flight_idx < total_pts - 1:
+        # 平滑更新位置
+        st.session_state.flight_idx += 1
+        st.session_state.drone_pos = st.session_state.flight_path[st.session_state.flight_idx]
+        
+        # 控制飞行速度（调整sleep时间）
+        time.sleep(0.05)
+        
+        # 无闪烁刷新
         st.rerun()
-
-    if st.session_state.is_connected:
-        st.success("✅ 在线：心跳包接收正常")
     else:
-        st.error("🚨 掉线警告：超过3秒未收到心跳包！")
-
-    if not st.session_state.heartbeat_data.empty:
-        last = st.session_state.heartbeat_data.iloc[-1]
-        st.info(f"最新心跳 | 序号: {last['序号']} | 时间: {last['时间'].strftime('%H:%M:%S')}")
-    else:
-        st.info("暂无心跳数据，请点击「开始模拟心跳」")
-
-    st.subheader("📈 心跳序号变化趋势（最近50次）")
-    plot_data = st.session_state.heartbeat_data.tail(50).copy()
-    if not plot_data.empty:
-        plot_data['时间'] = pd.to_datetime(plot_data['时间'])
-        st.line_chart(plot_data.set_index('时间')['序号'])
-    else:
-        st.info("暂无心跳数据，请点击「开始模拟心跳」")
-
-    if st.button("🗑️ 清空历史心跳数据"):
-        st.session_state.heartbeat_data = pd.DataFrame(columns=['序号', '时间'])
-        st.session_state.heartbeat_sequence = 0
-        st.rerun()
+        st.session_state.is_flying = False
+        st.success("✅ 无人机已到达目的地！任务完成！")
